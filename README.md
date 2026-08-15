@@ -39,6 +39,26 @@ uvicorn app.main:app --reload --port 8000
 
 Docs: http://127.0.0.1:8000/docs
 
+## Docker
+
+Postgres остаётся в Neon — контейнер только API.
+
+```bash
+cp .env.example .env
+# заполнить DATABASE_URL / OPENAI_API_KEY
+
+docker compose up --build -d
+```
+
+API: http://127.0.0.1:8000/docs  
+
+Без compose:
+
+```bash
+docker build -t knowledge-base-fastapi .
+docker run --rm -p 8000:8000 --env-file .env knowledge-base-fastapi
+```
+
 ## Inspect DB
 
 ```bash
