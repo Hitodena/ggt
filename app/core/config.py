@@ -5,10 +5,27 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def normalize_asyncpg_url(url: str) -> str:
-    """Map libpq sslmode/channel_binding query params to asyncpg-friendly ones."""
-    if "+asyncpg" not in url:
-        return url
-    parsed = urlparse(url)
+    """Force asyncpg dialect and map libpq SSL query params for asyncpg."""
+    if url.startswith("postgresql+asyncpg://"):
+        scheme_fixed = url
+    elif url.startswith("postgresql+psycopg2://"):
+        scheme_fixed = "postgresql+asyncpg://" + url.removeprefix(
+            "postgresql+psycopg2://"
+        )
+    elif url.startswith("postgresql+psycopg://"):
+        scheme_fixed = "postgresql+asyncpg://" + url.removeprefix(
+            "postgresql+psycopg://"
+        )
+    elif url.startswith("postgres://"):
+        scheme_fixed = "postgresql+asyncpg://" + url.removeprefix("postgres://")
+    elif url.startswith("postgresql://"):
+        scheme_fixed = "postgresql+asyncpg://" + url.removeprefix(
+            "postgresql://"
+        )
+    else:
+        scheme_fixed = url
+
+    parsed = urlparse(scheme_fixed)
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     sslmode = query.pop("sslmode", None)
     query.pop("channel_binding", None)
