@@ -1,17 +1,33 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.dao.knowledge import KnowledgeDAO
 from app.db.session import get_session
 from app.schemas import (
+    KnowledgeAnswerRequest,
+    KnowledgeAnswerResponse,
     KnowledgeCreate,
     KnowledgeDocumentOut,
     KnowledgeFromMessage,
     KnowledgeListResponse,
     KnowledgeSearchRequest,
     KnowledgeSearchResponse,
+    KnowledgeUploadResponse,
 )
+from app.services.answer import AnswerService
 from app.services.knowledge import KnowledgeService
+from app.services.upload import UploadError, UploadService
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
@@ -54,6 +70,46 @@ async def create_from_message(
 
 
 @router.post(
+    "/upload",
+    response_model=KnowledgeUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload a file into the specialist knowledge base",
+)
+async def upload_knowledge(
+    specialist_id: str = Form(..., min_length=1),
+    title: str | None = Form(None),
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+) -> KnowledgeUploadResponse:
+    settings = get_settings()
+    data = await file.read()
+    if len(data) > settings.max_upload_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds max size of {settings.max_upload_size_mb} MB",
+        )
+
+    service = UploadService(session, settings=settings)
+    try:
+        document, job_id = await service.upload(
+            specialist_id=specialist_id,
+            filename=file.filename or "upload.bin",
+            data=data,
+            content_type=file.content_type,
+            title=title,
+        )
+    except UploadError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return KnowledgeUploadResponse(
+        document=_to_out(document),
+        import_job_id=job_id,
+        chunks_count=len(document.chunks),
+        filename=file.filename or "upload.bin",
+    )
+
+
+@router.post(
     "/search",
     response_model=KnowledgeSearchResponse,
     summary="Semantic search in specialist knowledge base",
@@ -64,6 +120,19 @@ async def search_knowledge(
 ) -> KnowledgeSearchResponse:
     service = KnowledgeService(session)
     return await service.search(body)
+
+
+@router.post(
+    "/answer",
+    response_model=KnowledgeAnswerResponse,
+    summary="RAG answer from specialist knowledge base",
+)
+async def answer_knowledge(
+    body: KnowledgeAnswerRequest,
+    session: AsyncSession = Depends(get_session),
+) -> KnowledgeAnswerResponse:
+    service = AnswerService(session)
+    return await service.answer(body)
 
 
 @router.get(

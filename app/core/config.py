@@ -32,6 +32,17 @@ class Settings(BaseSettings):
     embedding_provider: str = "openai"
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
+    chat_model: str = "gpt-4o-mini"
+
+    max_upload_size_mb: int = 25
+    ocr_languages: str = "rus+eng"
+    pdf_ocr_min_chars: int = 20
+    libreoffice_path: str = "soffice"
+    libreoffice_timeout_sec: int = 60
+    tesseract_cmd: str | None = None
+
+    chunk_size: int = 1500
+    chunk_overlap: int = 200
 
     app_env: str = "dev"
     log_level: str = "INFO"
@@ -43,6 +54,10 @@ class Settings(BaseSettings):
     def alembic_url(self) -> str:
         """Prefer direct (non-pooler) URL for migrations."""
         return self.database_url_direct or self.database_url
+
+    @property
+    def max_upload_bytes(self) -> int:
+        return self.max_upload_size_mb * 1024 * 1024
 
 
 @lru_cache

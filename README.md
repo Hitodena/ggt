@@ -8,7 +8,8 @@ for a specialist and can be added from chat via "add to knowledge base".
 - FastAPI + SQLAlchemy async + asyncpg
 - Neon Lakebase Postgres with `pgvector` (`vector(1536)`, HNSW cosine)
 - Existing tables: `kb_documents`, `kb_chunks` (+ captures/imports/usage)
-- OpenAI-compatible embeddings (`text-embedding-3-small`)
+- OpenAI-compatible embeddings + chat (RAG)
+- File extraction: PDF / DOC / DOCX / XLS / XLSX (+ Tesseract OCR fallback for scanned PDFs)
 
 ## Setup
 
@@ -25,11 +26,30 @@ pip install -e ".[dev]"
 # uv sync
 
 cp .env.example .env
-# fill DATABASE_URL, DATABASE_URL_DIRECT, OPENAI_API_KEY
+# fill DATABASE_URL, DATABASE_URL_DIRECT, OPENAI_API_KEY, CHAT_MODEL
 ```
 
 `DATABASE_URL` — pooled Neon URL (`-pooler` hostname) for the API.  
 `DATABASE_URL_DIRECT` — non-pooler URL for Alembic (optional but recommended).
+
+### Windows: OCR and LibreOffice (for local runs)
+
+For scanned PDFs and legacy `.doc` conversion:
+
+```bash
+winget install UB-Mannheim.TesseractOCR
+winget install TheDocumentFoundation.LibreOffice
+```
+
+Then in `.env`:
+
+```env
+TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
+LIBREOFFICE_PATH=C:\Program Files\LibreOffice\program\soffice.exe
+OCR_LANGUAGES=rus+eng
+```
+
+Docker image already includes Tesseract + LibreOffice.
 
 ## Run
 
@@ -41,11 +61,11 @@ Docs: http://127.0.0.1:8000/docs
 
 ## Docker
 
-Postgres остаётся в Neon — контейнер только API.
+Postgres остаётся в Neon — контейнер только API (+ OCR/LibreOffice).
 
 ```bash
 cp .env.example .env
-# заполнить DATABASE_URL / OPENAI_API_KEY
+# заполнить DATABASE_URL / OPENAI_API_KEY / CHAT_MODEL
 
 docker compose up --build -d
 ```
@@ -79,7 +99,9 @@ alembic upgrade head
 |--------|------|---------|
 | `POST` | `/knowledge` | Manual add |
 | `POST` | `/knowledge/from-message` | Chat button (idempotent by `message_id`) |
-| `POST` | `/knowledge/search` | Semantic search |
+| `POST` | `/knowledge/upload` | Upload pdf/doc/docx/xls/xlsx → extract → embed |
+| `POST` | `/knowledge/search` | Semantic search (raw chunks) |
+| `POST` | `/knowledge/answer` | RAG: search + chat model answer |
 | `GET` | `/knowledge?specialist_id=` | List |
 | `GET` | `/knowledge/{id}` | Get one |
 | `DELETE` | `/knowledge/{id}` | Delete document + chunks |
@@ -97,6 +119,15 @@ curl -X POST http://127.0.0.1:8000/knowledge/from-message \
   }"
 ```
 
+### Upload a file
+
+```bash
+curl -X POST http://127.0.0.1:8000/knowledge/upload \
+  -F "specialist_id=spec-1" \
+  -F "title=Протокол после процедур" \
+  -F "file=@./protocol.pdf"
+```
+
 ### Search
 
 ```bash
@@ -108,6 +139,26 @@ curl -X POST http://127.0.0.1:8000/knowledge/search \
     \"limit\": 5
   }"
 ```
+
+### RAG answer
+
+```bash
+curl -X POST http://127.0.0.1:8000/knowledge/answer \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"specialist_id\": \"spec-1\",
+    \"query\": \"что делать после пилинга?\",
+    \"limit\": 5
+  }"
+```
+
+## How vectors + answers work
+
+1. **Embedding model** (`EMBEDDING_MODEL`) turns text into vectors for storage/search.
+2. **Search** returns similar chunks (raw text + distance).
+3. **Answer / RAG** takes those chunks as context and asks a separate **chat model** (`CHAT_MODEL`) to compose a readable reply.
+
+Embedding models cannot generate answers by themselves.
 
 ## Tests
 

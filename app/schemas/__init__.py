@@ -29,6 +29,12 @@ class KnowledgeSearchRequest(BaseModel):
     limit: int = Field(default=5, ge=1, le=50)
 
 
+class KnowledgeAnswerRequest(BaseModel):
+    specialist_id: str = Field(..., min_length=1)
+    query: str = Field(..., min_length=1)
+    limit: int = Field(default=5, ge=1, le=20)
+
+
 class KnowledgeChunkOut(BaseModel):
     id: str
     content: str
@@ -67,6 +73,20 @@ class KnowledgeSearchResponse(BaseModel):
     hits: list[KnowledgeSearchHit]
 
 
+class KnowledgeAnswerResponse(BaseModel):
+    query: str
+    specialist_id: str
+    answer: str
+    sources: list[KnowledgeSearchHit]
+
+
 class KnowledgeListResponse(BaseModel):
     items: list[KnowledgeDocumentOut]
     total: int
+
+
+class KnowledgeUploadResponse(BaseModel):
+    document: KnowledgeDocumentOut
+    import_job_id: str
+    chunks_count: int
+    filename: str

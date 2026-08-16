@@ -20,7 +20,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN useradd --create-home --uid 10001 appuser
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        tesseract-ocr \
+        tesseract-ocr-rus \
+        libreoffice-writer \
+        libreoffice-calc \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 appuser
 
 COPY --from=builder /install /usr/local
 COPY alembic.ini ./

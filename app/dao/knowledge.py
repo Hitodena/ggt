@@ -5,7 +5,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.kb import KBChunk, KBDocument, KBUsageEvent
+from app.models.kb import KBChunk, KBDocument, KBImportJob, KBUsageEvent
 
 
 def new_id() -> str:
@@ -73,6 +73,64 @@ class KnowledgeDAO:
         return rows, total
 
     @staticmethod
+    async def create_document_with_chunks(
+        session: AsyncSession,
+        *,
+        specialist_id: str,
+        title: str,
+        chunks: list[tuple[str, list[float]]],
+        source_type: str,
+        source_origin: str,
+        origin_message_id: str | None = None,
+        tags: list[str] | dict[str, Any] | None = None,
+    ) -> KBDocument:
+        if not chunks:
+            raise ValueError("At least one chunk is required")
+
+        document_id = new_id()
+        document = KBDocument(
+            id=document_id,
+            specialist_id=specialist_id,
+            title=title,
+            source_type=source_type,
+            source_origin=source_origin,
+            origin_message_id=origin_message_id,
+        )
+        session.add(document)
+
+        chunk_ids: list[str] = []
+        for content, embedding in chunks:
+            chunk_id = new_id()
+            chunk_ids.append(chunk_id)
+            session.add(
+                KBChunk(
+                    id=chunk_id,
+                    specialist_id=specialist_id,
+                    document_id=document_id,
+                    content=content,
+                    tags=tags,
+                    embedding=embedding,
+                )
+            )
+
+        await session.flush()
+        session.add(
+            KBUsageEvent(
+                id=new_id(),
+                specialist_id=specialist_id,
+                event_type="knowledge_created",
+                payload={
+                    "document_id": document_id,
+                    "chunk_ids": chunk_ids,
+                    "source_type": source_type,
+                    "origin_message_id": origin_message_id,
+                },
+            )
+        )
+        await session.commit()
+        return await KnowledgeDAO.get_by_id(session, document_id)  # type: ignore[return-value]
+
+    @staticmethod
     async def create_document_with_chunk(
         session: AsyncSession,
         *,
@@ -85,44 +143,16 @@ class KnowledgeDAO:
         origin_message_id: str | None = None,
         tags: list[str] | dict[str, Any] | None = None,
     ) -> KBDocument:
-        document_id = new_id()
-        chunk_id = new_id()
-
-        document = KBDocument(
-            id=document_id,
+        return await KnowledgeDAO.create_document_with_chunks(
+            session,
             specialist_id=specialist_id,
             title=title,
+            chunks=[(content, embedding)],
             source_type=source_type,
             source_origin=source_origin,
             origin_message_id=origin_message_id,
-        )
-        chunk = KBChunk(
-            id=chunk_id,
-            specialist_id=specialist_id,
-            document_id=document_id,
-            content=content,
             tags=tags,
-            embedding=embedding,
         )
-        session.add(document)
-        session.add(chunk)
-        await session.flush()
-
-        usage = KBUsageEvent(
-            id=new_id(),
-            specialist_id=specialist_id,
-            event_type="knowledge_created",
-            payload={
-                "document_id": document_id,
-                "chunk_id": chunk_id,
-                "source_type": source_type,
-                "origin_message_id": origin_message_id,
-            },
-        )
-        session.add(usage)
-        await session.commit()
-
-        return await KnowledgeDAO.get_by_id(session, document_id)  # type: ignore[return-value]
 
     @staticmethod
     async def delete_document(
@@ -178,3 +208,50 @@ class KnowledgeDAO:
             (chunk, document, float(dist))
             for chunk, document, dist in result.all()
         ]
+
+    @staticmethod
+    async def create_import_job(
+        session: AsyncSession,
+        *,
+        specialist_id: str,
+        filename: str,
+        content_type: str | None,
+        byte_size: int | None,
+    ) -> KBImportJob:
+        job = KBImportJob(
+            id=new_id(),
+            specialist_id=specialist_id,
+            filename=filename,
+            status="processing",
+            progress_pct=0,
+            step="queued",
+            content_type=content_type,
+            byte_size=byte_size,
+        )
+        session.add(job)
+        await session.commit()
+        await session.refresh(job)
+        return job
+
+    @staticmethod
+    async def update_import_job(
+        session: AsyncSession,
+        job_id: str,
+        *,
+        status: str | None = None,
+        step: str | None = None,
+        progress_pct: float | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        job = await session.get(KBImportJob, job_id)
+        if job is None:
+            return
+        if status is not None:
+            job.status = status
+        if step is not None:
+            job.step = step
+        if progress_pct is not None:
+            job.progress_pct = progress_pct
+        if error_message is not None:
+            job.error_message = error_message
+        await session.commit()
