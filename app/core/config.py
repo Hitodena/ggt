@@ -49,7 +49,11 @@ class Settings(BaseSettings):
     embedding_provider: str = "openai"
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
+    # Some gateways hang/break on dimensions= — set false to omit the param.
+    embedding_send_dimensions: bool = True
     chat_model: str = "gpt-4o-mini"
+    openai_timeout_sec: float = 30.0
+    openai_max_retries: int = 1
 
     max_upload_size_mb: int = 25
     ocr_languages: str = "rus+eng"

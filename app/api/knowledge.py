@@ -27,6 +27,7 @@ from app.schemas import (
     KnowledgeUploadResponse,
 )
 from app.services.answer import AnswerService
+from app.services.embeddings import EmbeddingError
 from app.services.knowledge import KnowledgeService
 from app.services.upload import UploadError, UploadService
 
@@ -54,7 +55,11 @@ async def create_knowledge(
         len(body.content),
     )
     service = KnowledgeService(session)
-    document = await service.create(body)
+    try:
+        document = await service.create(body)
+    except EmbeddingError as exc:
+        logger.error("API create embed error | err={}", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     logger.info("API create knowledge done | document_id={}", document.id)
     return _to_out(document)
 
@@ -76,7 +81,11 @@ async def create_from_message(
         body.title,
     )
     service = KnowledgeService(session)
-    document, created = await service.create_from_message(body)
+    try:
+        document, created = await service.create_from_message(body)
+    except EmbeddingError as exc:
+        logger.error("API from-message embed error | err={}", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     response.status_code = (
         status.HTTP_201_CREATED if created else status.HTTP_200_OK
     )
@@ -165,7 +174,11 @@ async def search_knowledge(
         body.limit,
     )
     service = KnowledgeService(session)
-    result = await service.search(body)
+    try:
+        result = await service.search(body)
+    except EmbeddingError as exc:
+        logger.error("API search embed error | err={}", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     logger.info(
         "API search done | specialist_id={} hits={}",
         body.specialist_id,

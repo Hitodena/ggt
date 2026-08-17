@@ -10,6 +10,7 @@ from app.schemas import (
     KnowledgeSearchHit,
 )
 from app.services.embeddings import EmbeddingService
+from app.services.openai_client import build_openai_client
 
 SYSTEM_PROMPT = (
     "Ты помощник специалиста. Отвечай на вопрос пользователя, используя "
@@ -42,10 +43,7 @@ class AnswerService:
                 raise RuntimeError(
                     "OPENAI_API_KEY is not set; cannot generate answers"
                 )
-            self._client = AsyncOpenAI(
-                api_key=self.settings.openai_api_key,
-                base_url=self.settings.openai_base_url,
-            )
+            self._client = build_openai_client(self.settings)
 
     async def answer(
         self,

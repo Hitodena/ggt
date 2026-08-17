@@ -1,7 +1,10 @@
+from time import perf_counter
+
 from loguru import logger
 from openai import AsyncOpenAI
 
 from app.core.config import Settings, get_settings
+from app.services.openai_client import build_openai_client
 
 
 class EmbeddingError(RuntimeError):
@@ -15,15 +18,15 @@ class EmbeddingService:
             raise EmbeddingError(
                 "OPENAI_API_KEY is not set; cannot generate embeddings"
             )
-        self._client = AsyncOpenAI(
-            api_key=self.settings.openai_api_key,
-            base_url=self.settings.openai_base_url,
-        )
+        self._client = build_openai_client(self.settings)
         logger.debug(
-            "EmbeddingService ready | model={} dims={} base_url={}",
+            "EmbeddingService ready | model={} dims={} send_dims={} "
+            "base_url={} timeout={}s",
             self.settings.embedding_model,
             self.settings.embedding_dimensions,
+            self.settings.embedding_send_dimensions,
             self.settings.openai_base_url,
+            self.settings.openai_timeout_sec,
         )
 
     async def embed(self, text: str) -> list[float]:
@@ -31,30 +34,47 @@ class EmbeddingService:
         if not cleaned:
             raise EmbeddingError("Cannot embed empty text")
 
-        logger.debug(
-            "Embed request | model={} chars={}",
+        kwargs: dict = {
+            "model": self.settings.embedding_model,
+            "input": cleaned,
+        }
+        if self.settings.embedding_send_dimensions:
+            kwargs["dimensions"] = self.settings.embedding_dimensions
+
+        started = perf_counter()
+        logger.info(
+            "Embed start | model={} chars={} send_dims={}",
             self.settings.embedding_model,
             len(cleaned),
+            self.settings.embedding_send_dimensions,
         )
         try:
-            response = await self._client.embeddings.create(
-                model=self.settings.embedding_model,
-                input=cleaned,
-                dimensions=self.settings.embedding_dimensions,
-            )
-        except Exception:
+            response = await self._client.embeddings.create(**kwargs)
+        except Exception as exc:
+            elapsed_ms = (perf_counter() - started) * 1000
             logger.exception(
-                "Embed failed | model={} chars={}",
+                "Embed failed | model={} chars={} elapsed_ms={:.0f} err={}",
                 self.settings.embedding_model,
                 len(cleaned),
+                elapsed_ms,
+                exc,
             )
-            raise
+            raise EmbeddingError(
+                f"Embedding request failed after {elapsed_ms:.0f}ms: {exc}"
+            ) from exc
 
         vector = response.data[0].embedding
+        elapsed_ms = (perf_counter() - started) * 1000
         if len(vector) != self.settings.embedding_dimensions:
             raise EmbeddingError(
                 f"Expected {self.settings.embedding_dimensions} dims, "
-                f"got {len(vector)}"
+                f"got {len(vector)}. If using Timeweb, set "
+                f"EMBEDDING_DIMENSIONS={len(vector)} or "
+                f"EMBEDDING_SEND_DIMENSIONS=false"
             )
-        logger.debug("Embed ok | dims={}", len(vector))
+        logger.info(
+            "Embed ok | dims={} elapsed_ms={:.0f}",
+            len(vector),
+            elapsed_ms,
+        )
         return list(vector)
