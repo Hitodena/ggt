@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator
 
+from loguru import logger
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -17,9 +18,13 @@ def get_engine() -> AsyncEngine:
     global _engine, _session_factory
     if _engine is None:
         settings = get_settings()
+        db_url = settings.sqlalchemy_url()
+        # Log host only — never full credentials.
+        host = db_url.split("@")[-1] if "@" in db_url else "<hidden>"
+        logger.info("Creating DB engine | host={}", host)
         _engine = create_async_engine(
-            settings.sqlalchemy_url(),
-            echo=settings.app_env == "dev",
+            db_url,
+            echo=False,
             pool_pre_ping=True,
         )
         _session_factory = async_sessionmaker(
@@ -45,6 +50,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 async def dispose_engine() -> None:
     global _engine, _session_factory
     if _engine is not None:
+        logger.info("Disposing DB engine")
         await _engine.dispose()
         _engine = None
         _session_factory = None

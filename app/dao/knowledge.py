@@ -1,6 +1,7 @@
 from typing import Any
 from uuid import uuid4
 
+from loguru import logger
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -70,6 +71,12 @@ class KnowledgeDAO:
             .offset(offset)
         )
         rows = list((await session.execute(stmt)).scalars().all())
+        logger.debug(
+            "DAO list | specialist_id={} returned={} total={}",
+            specialist_id,
+            len(rows),
+            total,
+        )
         return rows, total
 
     @staticmethod
@@ -128,6 +135,14 @@ class KnowledgeDAO:
             )
         )
         await session.commit()
+        logger.info(
+            "DAO created document | id={} specialist_id={} chunks={} "
+            "source_type={}",
+            document_id,
+            specialist_id,
+            len(chunk_ids),
+            source_type,
+        )
         return await KnowledgeDAO.get_by_id(session, document_id)  # type: ignore[return-value]
 
     @staticmethod
@@ -182,6 +197,7 @@ class KnowledgeDAO:
             )
         )
         await session.commit()
+        logger.info("DAO deleted document | id={}", document_id)
         return True
 
     @staticmethod
@@ -204,10 +220,17 @@ class KnowledgeDAO:
             .limit(limit)
         )
         result = await session.execute(stmt)
-        return [
+        rows = [
             (chunk, document, float(dist))
             for chunk, document, dist in result.all()
         ]
+        logger.debug(
+            "DAO search_similar | specialist_id={} limit={} hits={}",
+            specialist_id,
+            limit,
+            len(rows),
+        )
+        return rows
 
     @staticmethod
     async def create_import_job(
@@ -231,6 +254,12 @@ class KnowledgeDAO:
         session.add(job)
         await session.commit()
         await session.refresh(job)
+        logger.info(
+            "DAO import job created | job_id={} specialist_id={} file={!r}",
+            job.id,
+            specialist_id,
+            filename,
+        )
         return job
 
     @staticmethod
@@ -245,6 +274,7 @@ class KnowledgeDAO:
     ) -> None:
         job = await session.get(KBImportJob, job_id)
         if job is None:
+            logger.warning("DAO import job missing | job_id={}", job_id)
             return
         if status is not None:
             job.status = status
@@ -255,3 +285,10 @@ class KnowledgeDAO:
         if error_message is not None:
             job.error_message = error_message
         await session.commit()
+        logger.debug(
+            "DAO import job update | job_id={} status={} step={} progress={}",
+            job_id,
+            job.status,
+            job.step,
+            job.progress_pct,
+        )

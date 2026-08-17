@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from loguru import logger
+
 from app.core.config import Settings, get_settings
 
 
@@ -26,6 +28,13 @@ def chunk_text(
     chunks: list[str] = []
     for block in normalized:
         chunks.extend(_chunk_block(block, size=size, overlap=overlap))
+    logger.debug(
+        "Chunking done | input_blocks={} chunks={} size={} overlap={}",
+        len(normalized),
+        len(chunks),
+        size,
+        overlap,
+    )
     return chunks
 
 

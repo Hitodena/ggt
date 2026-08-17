@@ -9,6 +9,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -46,8 +47,15 @@ async def create_knowledge(
     body: KnowledgeCreate,
     session: AsyncSession = Depends(get_session),
 ) -> KnowledgeDocumentOut:
+    logger.info(
+        "API create knowledge | specialist_id={} title={!r} chars={}",
+        body.specialist_id,
+        body.title,
+        len(body.content),
+    )
     service = KnowledgeService(session)
     document = await service.create(body)
+    logger.info("API create knowledge done | document_id={}", document.id)
     return _to_out(document)
 
 
@@ -61,10 +69,21 @@ async def create_from_message(
     response: Response,
     session: AsyncSession = Depends(get_session),
 ) -> KnowledgeDocumentOut:
+    logger.info(
+        "API from-message | specialist_id={} message_id={} title={!r}",
+        body.specialist_id,
+        body.message_id,
+        body.title,
+    )
     service = KnowledgeService(session)
     document, created = await service.create_from_message(body)
     response.status_code = (
         status.HTTP_201_CREATED if created else status.HTTP_200_OK
+    )
+    logger.info(
+        "API from-message done | document_id={} created={}",
+        document.id,
+        created,
     )
     return _to_out(document)
 
@@ -83,7 +102,21 @@ async def upload_knowledge(
 ) -> KnowledgeUploadResponse:
     settings = get_settings()
     data = await file.read()
+    logger.info(
+        "API upload | specialist_id={} filename={!r} content_type={} "
+        "bytes={} title={!r}",
+        specialist_id,
+        file.filename,
+        file.content_type,
+        len(data),
+        title,
+    )
     if len(data) > settings.max_upload_bytes:
+        logger.warning(
+            "API upload rejected: file too large | bytes={} max={}",
+            len(data),
+            settings.max_upload_bytes,
+        )
         raise HTTPException(
             status_code=413,
             detail=f"File exceeds max size of {settings.max_upload_size_mb} MB",
@@ -99,8 +132,15 @@ async def upload_knowledge(
             title=title,
         )
     except UploadError as exc:
+        logger.warning("API upload failed | specialist_id={} err={}", specialist_id, exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    logger.info(
+        "API upload done | document_id={} job_id={} chunks={}",
+        document.id,
+        job_id,
+        len(document.chunks),
+    )
     return KnowledgeUploadResponse(
         document=_to_out(document),
         import_job_id=job_id,
@@ -118,8 +158,20 @@ async def search_knowledge(
     body: KnowledgeSearchRequest,
     session: AsyncSession = Depends(get_session),
 ) -> KnowledgeSearchResponse:
+    logger.info(
+        "API search | specialist_id={} query={!r} limit={}",
+        body.specialist_id,
+        body.query,
+        body.limit,
+    )
     service = KnowledgeService(session)
-    return await service.search(body)
+    result = await service.search(body)
+    logger.info(
+        "API search done | specialist_id={} hits={}",
+        body.specialist_id,
+        len(result.hits),
+    )
+    return result
 
 
 @router.post(
@@ -131,8 +183,21 @@ async def answer_knowledge(
     body: KnowledgeAnswerRequest,
     session: AsyncSession = Depends(get_session),
 ) -> KnowledgeAnswerResponse:
+    logger.info(
+        "API answer | specialist_id={} query={!r} limit={}",
+        body.specialist_id,
+        body.query,
+        body.limit,
+    )
     service = AnswerService(session)
-    return await service.answer(body)
+    result = await service.answer(body)
+    logger.info(
+        "API answer done | specialist_id={} sources={} answer_chars={}",
+        body.specialist_id,
+        len(result.sources),
+        len(result.answer),
+    )
+    return result
 
 
 @router.get(
@@ -146,11 +211,23 @@ async def list_knowledge(
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
 ) -> KnowledgeListResponse:
+    logger.info(
+        "API list | specialist_id={} limit={} offset={}",
+        specialist_id,
+        limit,
+        offset,
+    )
     items, total = await KnowledgeDAO.list_for_specialist(
         session,
         specialist_id=specialist_id,
         limit=limit,
         offset=offset,
+    )
+    logger.info(
+        "API list done | specialist_id={} returned={} total={}",
+        specialist_id,
+        len(items),
+        total,
     )
     return KnowledgeListResponse(
         items=[_to_out(item) for item in items],
@@ -168,12 +245,18 @@ async def get_knowledge(
     specialist_id: str | None = Query(None),
     session: AsyncSession = Depends(get_session),
 ) -> KnowledgeDocumentOut:
+    logger.info(
+        "API get | document_id={} specialist_id={}",
+        document_id,
+        specialist_id,
+    )
     document = await KnowledgeDAO.get_by_id(
         session,
         document_id,
         specialist_id=specialist_id,
     )
     if document is None:
+        logger.warning("API get: document not found | id={}", document_id)
         raise HTTPException(status_code=404, detail="Document not found")
     return _to_out(document)
 
@@ -188,11 +271,18 @@ async def delete_knowledge(
     specialist_id: str | None = Query(None),
     session: AsyncSession = Depends(get_session),
 ) -> Response:
+    logger.info(
+        "API delete | document_id={} specialist_id={}",
+        document_id,
+        specialist_id,
+    )
     deleted = await KnowledgeDAO.delete_document(
         session,
         document_id,
         specialist_id=specialist_id,
     )
     if not deleted:
+        logger.warning("API delete: document not found | id={}", document_id)
         raise HTTPException(status_code=404, detail="Document not found")
+    logger.info("API delete done | document_id={}", document_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

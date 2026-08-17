@@ -1,3 +1,4 @@
+from loguru import logger
 from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,6 +51,13 @@ class AnswerService:
         self,
         payload: KnowledgeAnswerRequest,
     ) -> KnowledgeAnswerResponse:
+        logger.info(
+            "RAG answer start | specialist_id={} query={!r} limit={} model={}",
+            payload.specialist_id,
+            payload.query,
+            payload.limit,
+            self.settings.chat_model,
+        )
         vector = await self.embeddings.embed(payload.query)
         rows = await KnowledgeDAO.search_similar(
             self.session,
@@ -69,6 +77,11 @@ class AnswerService:
             for chunk, document, distance in rows
         ]
         if not sources:
+            logger.warning(
+                "RAG no hits | specialist_id={} query={!r}",
+                payload.specialist_id,
+                payload.query,
+            )
             return KnowledgeAnswerResponse(
                 query=payload.query,
                 specialist_id=payload.specialist_id,
@@ -76,6 +89,12 @@ class AnswerService:
                 sources=[],
             )
 
+        logger.info(
+            "RAG hits | specialist_id={} count={} best_distance={:.4f}",
+            payload.specialist_id,
+            len(sources),
+            sources[0].distance,
+        )
         context = self._build_context(sources)
         completion = await self._client.chat.completions.create(
             model=self.settings.chat_model,
@@ -93,8 +112,15 @@ class AnswerService:
         )
         answer = (completion.choices[0].message.content or "").strip()
         if not answer:
+            logger.warning("RAG chat returned empty answer")
             answer = NO_HITS_ANSWER
 
+        logger.info(
+            "RAG answer ready | specialist_id={} sources={} answer_chars={}",
+            payload.specialist_id,
+            len(sources),
+            len(answer),
+        )
         return KnowledgeAnswerResponse(
             query=payload.query,
             specialist_id=payload.specialist_id,

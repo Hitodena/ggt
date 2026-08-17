@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -47,6 +48,13 @@ class UploadService:
             )
 
         safe_name = Path(filename).name
+        logger.info(
+            "Upload start | specialist_id={} file={!r} bytes={} content_type={}",
+            specialist_id,
+            safe_name,
+            len(data),
+            content_type,
+        )
         job = await KnowledgeDAO.create_import_job(
             self.session,
             specialist_id=specialist_id,
@@ -54,6 +62,7 @@ class UploadService:
             content_type=content_type,
             byte_size=len(data),
         )
+        logger.debug("Import job created | job_id={}", job.id)
 
         try:
             await KnowledgeDAO.update_import_job(
@@ -63,6 +72,12 @@ class UploadService:
                 progress_pct=10,
             )
             blocks = self.extractor.extract(safe_name, data)
+            logger.info(
+                "Upload extracted | job_id={} blocks={} chars={}",
+                job.id,
+                len(blocks),
+                sum(len(b) for b in blocks),
+            )
 
             await KnowledgeDAO.update_import_job(
                 self.session,
@@ -73,6 +88,11 @@ class UploadService:
             chunks = chunk_text(blocks, settings=self.settings)
             if not chunks:
                 raise UploadError("No text chunks produced from file")
+            logger.info(
+                "Upload chunked | job_id={} chunks={}",
+                job.id,
+                len(chunks),
+            )
 
             await KnowledgeDAO.update_import_job(
                 self.session,
@@ -90,6 +110,12 @@ class UploadService:
                         self.session,
                         job.id,
                         progress_pct=min(progress, 90),
+                    )
+                    logger.debug(
+                        "Upload embedding progress | job_id={} {}/{}",
+                        job.id,
+                        index + 1,
+                        len(chunks),
                     )
 
             doc_title = (title or Path(safe_name).stem).strip() or safe_name
@@ -110,8 +136,19 @@ class UploadService:
                 step="done",
                 progress_pct=100,
             )
+            logger.info(
+                "Upload done | job_id={} document_id={} chunks={}",
+                job.id,
+                document.id,
+                len(document.chunks),
+            )
             return document, job.id
         except (ExtractionError, UploadError) as exc:
+            logger.warning(
+                "Upload failed | job_id={} err={}",
+                job.id,
+                exc,
+            )
             await KnowledgeDAO.update_import_job(
                 self.session,
                 job.id,
@@ -121,6 +158,7 @@ class UploadService:
             )
             raise UploadError(str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
+            logger.exception("Upload crashed | job_id={} err={}", job.id, exc)
             await KnowledgeDAO.update_import_job(
                 self.session,
                 job.id,
