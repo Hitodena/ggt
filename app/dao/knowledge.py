@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.sql import ColumnElement
 
 from app.models.kb import KBChunk, KBDocument, KBImportJob, KBUsageEvent
-from app.services.tags import extract_filter_audience, normalize_knowledge_tags
+from app.core.tags import extract_filter_audience, normalize_knowledge_tags
 
 
 def new_id() -> str:

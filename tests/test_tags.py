@@ -1,6 +1,6 @@
 """Unit tests for tag normalization and audience visibility rules."""
 
-from app.services.tags import (
+from app.core.tags import (
     chunk_visible_for_filter,
     extract_audience,
     normalize_knowledge_tags,
