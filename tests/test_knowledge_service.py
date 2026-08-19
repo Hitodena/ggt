@@ -127,3 +127,37 @@ async def test_search_maps_hits() -> None:
         assert result.hits[0].content == "контент"
     finally:
         knowledge_mod.KnowledgeDAO.search_similar = original_search
+
+
+@pytest.mark.asyncio
+async def test_search_passes_filter_tags() -> None:
+    session = AsyncMock()
+    embeddings = MagicMock()
+    embeddings.embed = AsyncMock(return_value=[0.3] * 1536)
+
+    from app.dao import knowledge as knowledge_mod
+
+    original_search = knowledge_mod.KnowledgeDAO.search_similar
+    captured: dict = {}
+
+    async def fake_search(*_args, **_kwargs):
+        captured.update(_kwargs)
+        return []
+
+    knowledge_mod.KnowledgeDAO.search_similar = staticmethod(fake_search)
+    try:
+        service = KnowledgeService(session, embeddings=embeddings)
+        filter_tags = {"audience": {"gender": "male", "age_min": 40}}
+        await service.search(
+            KnowledgeSearchRequest(
+                specialist_id="spec-1",
+                query="протокол",
+                limit=3,
+                filter_tags=filter_tags,
+            )
+        )
+        assert captured["filter_tags"] == filter_tags
+        assert captured["specialist_id"] == "spec-1"
+        assert captured["limit"] == 3
+    finally:
+        knowledge_mod.KnowledgeDAO.search_similar = original_search

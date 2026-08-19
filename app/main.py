@@ -31,7 +31,23 @@ app = FastAPI(
     title="Specialist Knowledge Base",
     description=(
         "Per-specialist vector knowledge base on Neon Postgres + pgvector. "
-        "No client binding — shared KB for a specialist."
+        "No client binding — shared KB for a specialist.\n\n"
+        "## Segment tags (`tags.audience`)\n\n"
+        "Chunks can carry JSON tags with two namespaces:\n\n"
+        "- **`system`** — technical metadata (e.g. upload filename). "
+        "Does **not** hide a chunk from search.\n"
+        "- **`audience`** — segment criteria "
+        "(e.g. `{\"gender\": \"male\", \"age_min\": 40}`). "
+        "Such chunks are **hidden** from `/knowledge/search` and "
+        "`/knowledge/answer` unless the request passes matching "
+        "`filter_tags.audience`.\n\n"
+        "With `filter_tags.audience`, results include general chunks "
+        "(no audience) **and** chunks whose `tags.audience` JSON "
+        "contains the filter (Postgres JSONB `@>`).\n\n"
+        "Example create tags:\n"
+        "`{\"audience\": {\"gender\": \"male\", \"age_min\": 40}}`\n\n"
+        "Example search filter:\n"
+        "`{\"filter_tags\": {\"audience\": {\"gender\": \"male\", \"age_min\": 40}}}`"
     ),
     version="0.1.0",
     lifespan=lifespan,

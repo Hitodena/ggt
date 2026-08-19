@@ -140,6 +140,20 @@ curl -X POST http://127.0.0.1:8000/knowledge/search \
   }"
 ```
 
+Segmented notes use `tags.audience` and are hidden from default search.
+Pass `filter_tags` to include them (together with general notes):
+
+```bash
+curl -X POST http://127.0.0.1:8000/knowledge/search \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"specialist_id\": \"spec-1\",
+    \"query\": \"протокол\",
+    \"limit\": 5,
+    \"filter_tags\": {\"audience\": {\"gender\": \"male\", \"age_min\": 40}}
+  }"
+```
+
 ### RAG answer
 
 ```bash

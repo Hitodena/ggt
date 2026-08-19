@@ -90,10 +90,11 @@ class KnowledgeService:
         payload: KnowledgeSearchRequest,
     ) -> KnowledgeSearchResponse:
         logger.info(
-            "Search | specialist_id={} query={!r} limit={}",
+            "Search | specialist_id={} query={!r} limit={} filter_tags={}",
             payload.specialist_id,
             payload.query,
             payload.limit,
+            payload.filter_tags,
         )
         vector = await self.embeddings.embed(payload.query)
         rows = await KnowledgeDAO.search_similar(
@@ -101,6 +102,7 @@ class KnowledgeService:
             specialist_id=payload.specialist_id,
             query_embedding=vector,
             limit=payload.limit,
+            filter_tags=payload.filter_tags,
         )
         hits = [
             KnowledgeSearchHit(

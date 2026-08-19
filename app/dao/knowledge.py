@@ -2,11 +2,14 @@ from typing import Any
 from uuid import uuid4
 
 from loguru import logger
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select, type_coerce
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.sql import ColumnElement
 
 from app.models.kb import KBChunk, KBDocument, KBImportJob, KBUsageEvent
+from app.services.tags import extract_filter_audience, normalize_knowledge_tags
 
 
 def new_id() -> str:
@@ -105,6 +108,7 @@ class KnowledgeDAO:
         )
         session.add(document)
 
+        normalized_tags = normalize_knowledge_tags(tags)
         chunk_ids: list[str] = []
         for content, embedding in chunks:
             chunk_id = new_id()
@@ -115,7 +119,7 @@ class KnowledgeDAO:
                     specialist_id=specialist_id,
                     document_id=document_id,
                     content=content,
-                    tags=tags,
+                    tags=normalized_tags,
                     embedding=embedding,
                 )
             )
@@ -201,12 +205,37 @@ class KnowledgeDAO:
         return True
 
     @staticmethod
+    def _audience_visibility_clause(
+        filter_tags: dict[str, Any] | None,
+    ) -> ColumnElement[bool]:
+        """Build SQL visibility rules for segment (audience) tags.
+
+        Without audience criteria: hide any chunk that has ``tags.audience``.
+        With audience criteria: keep general chunks and chunks whose
+        ``tags.audience`` JSON contains the filter audience.
+        """
+        audience_filter = extract_filter_audience(filter_tags)
+        has_no_audience = or_(
+            KBChunk.tags.is_(None),
+            ~KBChunk.tags.has_key("audience"),
+            func.jsonb_typeof(KBChunk.tags["audience"]) == "null",
+        )
+        if audience_filter is None:
+            return has_no_audience
+
+        audience_match = KBChunk.tags["audience"].contains(
+            type_coerce(audience_filter, JSONB)
+        )
+        return or_(has_no_audience, audience_match)
+
+    @staticmethod
     async def search_similar(
         session: AsyncSession,
         *,
         specialist_id: str,
         query_embedding: list[float],
         limit: int = 5,
+        filter_tags: dict[str, Any] | None = None,
     ) -> list[tuple[KBChunk, KBDocument, float]]:
         distance = KBChunk.embedding.cosine_distance(query_embedding)
         stmt = (
@@ -215,6 +244,7 @@ class KnowledgeDAO:
             .where(
                 KBChunk.specialist_id == specialist_id,
                 KBChunk.embedding.is_not(None),
+                KnowledgeDAO._audience_visibility_clause(filter_tags),
             )
             .order_by(distance)
             .limit(limit)
@@ -225,10 +255,12 @@ class KnowledgeDAO:
             for chunk, document, dist in result.all()
         ]
         logger.debug(
-            "DAO search_similar | specialist_id={} limit={} hits={}",
+            "DAO search_similar | specialist_id={} limit={} hits={} "
+            "filter_tags={}",
             specialist_id,
             limit,
             len(rows),
+            filter_tags,
         )
         return rows
 

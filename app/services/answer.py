@@ -50,11 +50,13 @@ class AnswerService:
         payload: KnowledgeAnswerRequest,
     ) -> KnowledgeAnswerResponse:
         logger.info(
-            "RAG answer start | specialist_id={} query={!r} limit={} model={}",
+            "RAG answer start | specialist_id={} query={!r} limit={} "
+            "model={} filter_tags={}",
             payload.specialist_id,
             payload.query,
             payload.limit,
             self.settings.chat_model,
+            payload.filter_tags,
         )
         vector = await self.embeddings.embed(payload.query)
         rows = await KnowledgeDAO.search_similar(
@@ -62,6 +64,7 @@ class AnswerService:
             specialist_id=payload.specialist_id,
             query_embedding=vector,
             limit=payload.limit,
+            filter_tags=payload.filter_tags,
         )
         sources = [
             KnowledgeSearchHit(

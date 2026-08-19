@@ -126,7 +126,12 @@ class UploadService:
                 chunks=embedded,
                 source_type="file_upload",
                 source_origin=safe_name,
-                tags={"filename": safe_name, "content_type": content_type},
+                tags={
+                    "system": {
+                        "filename": safe_name,
+                        "content_type": content_type,
+                    }
+                },
             )
 
             await KnowledgeDAO.update_import_job(

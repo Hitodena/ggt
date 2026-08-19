@@ -43,6 +43,12 @@ def _to_out(document) -> KnowledgeDocumentOut:
     response_model=KnowledgeDocumentOut,
     status_code=status.HTTP_201_CREATED,
     summary="Add knowledge manually",
+    description=(
+        "Create a knowledge document with one embedded chunk. "
+        "Optional `tags.audience` marks a segment note "
+        "(e.g. gender/age) that is hidden from default search/answer "
+        "until a matching `filter_tags.audience` is passed."
+    ),
 )
 async def create_knowledge(
     body: KnowledgeCreate,
@@ -68,6 +74,12 @@ async def create_knowledge(
     "/from-message",
     response_model=KnowledgeDocumentOut,
     summary="Add chat message to specialist knowledge base",
+    description=(
+        "Idempotent by `(specialist_id, message_id)`. "
+        "Supports the same `tags.system` / `tags.audience` shape as "
+        "manual create. Segment (`audience`) notes stay hidden from "
+        "default search until `filter_tags` is provided."
+    ),
 )
 async def create_from_message(
     body: KnowledgeFromMessage,
@@ -102,6 +114,12 @@ async def create_from_message(
     response_model=KnowledgeUploadResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Upload a file into the specialist knowledge base",
+    description=(
+        "Extract text from pdf/doc/docx/xls/xlsx, chunk, embed, and store. "
+        "Technical metadata is stored under `tags.system` "
+        "(`filename`, `content_type`) and does **not** hide chunks from "
+        "search."
+    ),
 )
 async def upload_knowledge(
     specialist_id: str = Form(..., min_length=1),
@@ -162,6 +180,12 @@ async def upload_knowledge(
     "/search",
     response_model=KnowledgeSearchResponse,
     summary="Semantic search in specialist knowledge base",
+    description=(
+        "Cosine similarity search over chunk embeddings. "
+        "By default, chunks with `tags.audience` are excluded. "
+        "Pass `filter_tags.audience` to also include matching segment "
+        "notes (plus general notes without audience)."
+    ),
 )
 async def search_knowledge(
     body: KnowledgeSearchRequest,
@@ -191,6 +215,12 @@ async def search_knowledge(
     "/answer",
     response_model=KnowledgeAnswerResponse,
     summary="RAG answer from specialist knowledge base",
+    description=(
+        "Retrieve similar chunks (same audience visibility rules as "
+        "`/knowledge/search`), then ask the chat model to answer using "
+        "only that context. Use `filter_tags.audience` when the client "
+        "profile should unlock segment-specific notes."
+    ),
 )
 async def answer_knowledge(
     body: KnowledgeAnswerRequest,

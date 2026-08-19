@@ -95,3 +95,43 @@ async def test_answer_with_hits_calls_chat() -> None:
         ]
     finally:
         knowledge_mod.KnowledgeDAO.search_similar = original
+
+
+@pytest.mark.asyncio
+async def test_answer_passes_filter_tags() -> None:
+    session = AsyncMock()
+    embeddings = MagicMock()
+    embeddings.embed = AsyncMock(return_value=[0.2] * 1536)
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock()
+
+    from app.dao import knowledge as knowledge_mod
+
+    original = knowledge_mod.KnowledgeDAO.search_similar
+    captured: dict = {}
+
+    async def fake_search(*_args, **_kwargs):
+        captured.update(_kwargs)
+        return []
+
+    knowledge_mod.KnowledgeDAO.search_similar = staticmethod(fake_search)
+    try:
+        service = AnswerService(
+            session,
+            embeddings=embeddings,
+            client=client,
+        )
+        filter_tags = {"audience": {"gender": "male", "age_min": 40}}
+        result = await service.answer(
+            KnowledgeAnswerRequest(
+                specialist_id="spec-1",
+                query="что после пилинга?",
+                limit=3,
+                filter_tags=filter_tags,
+            )
+        )
+        assert result.answer == NO_HITS_ANSWER
+        assert captured["filter_tags"] == filter_tags
+        client.chat.completions.create.assert_not_called()
+    finally:
+        knowledge_mod.KnowledgeDAO.search_similar = original
