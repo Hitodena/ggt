@@ -13,6 +13,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.filenames import normalize_upload_filename
 from app.dao.knowledge import KnowledgeDAO
 from app.db.session import get_session
 from app.schemas import (
@@ -129,11 +130,12 @@ async def upload_knowledge(
 ) -> KnowledgeUploadResponse:
     settings = get_settings()
     data = await file.read()
+    filename = normalize_upload_filename(file.filename)
     logger.info(
         "API upload | specialist_id={} filename={!r} content_type={} "
         "bytes={} title={!r}",
         specialist_id,
-        file.filename,
+        filename,
         file.content_type,
         len(data),
         title,
@@ -153,7 +155,7 @@ async def upload_knowledge(
     try:
         document, job_id = await service.upload(
             specialist_id=specialist_id,
-            filename=file.filename or "upload.bin",
+            filename=filename,
             data=data,
             content_type=file.content_type,
             title=title,
@@ -172,7 +174,7 @@ async def upload_knowledge(
         document=_to_out(document),
         import_job_id=job_id,
         chunks_count=len(document.chunks),
-        filename=file.filename or "upload.bin",
+        filename=filename,
     )
 
 

@@ -4,6 +4,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.core.filenames import normalize_upload_filename
 from app.dao.knowledge import KnowledgeDAO
 from app.models.kb import KBDocument
 from app.services.chunking import chunk_text
@@ -47,7 +48,7 @@ class UploadService:
                 f"File exceeds max size of {self.settings.max_upload_size_mb} MB"
             )
 
-        safe_name = Path(filename).name
+        safe_name = normalize_upload_filename(filename)
         logger.info(
             "Upload start | specialist_id={} file={!r} bytes={} content_type={}",
             specialist_id,

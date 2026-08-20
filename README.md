@@ -174,6 +174,14 @@ curl -X POST http://127.0.0.1:8000/knowledge/answer \
 
 Embedding models cannot generate answers by themselves.
 
+### File chunking
+
+Upload pipeline: extract → pack paragraphs into chunks (`CHUNK_SIZE` / `CHUNK_OVERLAP`) → embed.
+
+DOCX paragraphs are **packed together** up to `CHUNK_SIZE` (default 1500), so a section heading stays with the following list/body instead of becoming a standalone chunk. Already imported files keep old cuts until re-uploaded.
+
+Upload filenames are normalized to UTF-8 (fixes common multipart mojibake).
+
 ## Tests
 
 ```bash

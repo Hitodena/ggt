@@ -12,6 +12,12 @@ def chunk_text(
     *,
     settings: Settings | None = None,
 ) -> list[str]:
+    """Pack extracted blocks into overlapping chunks.
+
+    Blocks from extractors (DOCX paragraphs, PDF pages, etc.) are joined and
+    packed together so a short section heading stays with the following body
+    instead of becoming a standalone chunk.
+    """
     cfg = settings or get_settings()
     size = max(1, cfg.chunk_size)
     overlap = max(0, min(cfg.chunk_overlap, size // 2))
@@ -21,16 +27,16 @@ def chunk_text(
     else:
         source_blocks = blocks
 
-    normalized = [block.strip() for block in source_blocks if block and block.strip()]
-    if not normalized:
+    paragraphs = _flatten_paragraphs(source_blocks)
+    if not paragraphs:
         return []
 
-    chunks: list[str] = []
-    for block in normalized:
-        chunks.extend(_chunk_block(block, size=size, overlap=overlap))
+    chunks = _pack_paragraphs(paragraphs, size=size, overlap=overlap)
     logger.debug(
-        "Chunking done | input_blocks={} chunks={} size={} overlap={}",
-        len(normalized),
+        "Chunking done | input_blocks={} paragraphs={} chunks={} "
+        "size={} overlap={}",
+        len([b for b in source_blocks if b and b.strip()]),
+        len(paragraphs),
         len(chunks),
         size,
         overlap,
@@ -38,14 +44,24 @@ def chunk_text(
     return chunks
 
 
-def _chunk_block(text: str, *, size: int, overlap: int) -> list[str]:
-    if len(text) <= size:
-        return [text]
+def _flatten_paragraphs(blocks: list[str]) -> list[str]:
+    paragraphs: list[str] = []
+    for block in blocks:
+        if not block or not block.strip():
+            continue
+        for line in block.split("\n"):
+            text = line.strip()
+            if text:
+                paragraphs.append(text)
+    return paragraphs
 
-    paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
-    if not paragraphs:
-        return _chunk_by_chars(text, size=size, overlap=overlap)
 
+def _pack_paragraphs(
+    paragraphs: list[str],
+    *,
+    size: int,
+    overlap: int,
+) -> list[str]:
     chunks: list[str] = []
     current = ""
     for paragraph in paragraphs:
