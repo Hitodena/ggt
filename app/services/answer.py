@@ -3,6 +3,7 @@ from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.core.tags import extract_chunk_system_meta
 from app.dao.knowledge import KnowledgeDAO
 from app.schemas import (
     KnowledgeAnswerRequest,
@@ -66,17 +67,24 @@ class AnswerService:
             limit=payload.limit,
             filter_tags=payload.filter_tags,
         )
-        sources = [
-            KnowledgeSearchHit(
-                document_id=document.id,
-                document_title=document.title,
-                chunk_id=chunk.id,
-                content=chunk.content,
-                distance=distance,
-                tags=chunk.tags,
+        sources = []
+        for chunk, document, distance in rows:
+            chunk_index, section_title, is_heading_only = (
+                extract_chunk_system_meta(chunk.tags)
             )
-            for chunk, document, distance in rows
-        ]
+            sources.append(
+                KnowledgeSearchHit(
+                    document_id=document.id,
+                    document_title=document.title,
+                    chunk_id=chunk.id,
+                    content=chunk.content,
+                    distance=distance,
+                    tags=chunk.tags,
+                    chunk_index=chunk_index,
+                    section_title=section_title,
+                    is_heading_only=is_heading_only,
+                )
+            )
         if not sources:
             logger.warning(
                 "RAG no hits | specialist_id={} query={!r}",

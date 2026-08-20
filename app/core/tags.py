@@ -64,6 +64,25 @@ def extract_audience(
     return None
 
 
+def extract_chunk_system_meta(
+    tags: list[str] | dict[str, Any] | None,
+) -> tuple[int | None, str | None, bool | None]:
+    """Return ``(chunk_index, section_title, is_heading_only)`` from tags."""
+    if not isinstance(tags, dict):
+        return None, None, None
+    system = tags.get("system")
+    if not isinstance(system, dict):
+        return None, None, None
+    chunk_index = system.get("chunk_index")
+    section_title = system.get("section_title")
+    is_heading_only = system.get("is_heading_only")
+    return (
+        int(chunk_index) if isinstance(chunk_index, int) else None,
+        str(section_title) if isinstance(section_title, str) else None,
+        bool(is_heading_only) if is_heading_only is not None else None,
+    )
+
+
 def extract_filter_audience(
     filter_tags: dict[str, Any] | None,
 ) -> dict[str, Any] | None:

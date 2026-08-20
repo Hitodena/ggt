@@ -3,21 +3,30 @@
 from __future__ import annotations
 
 import io
+import re
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import openpyxl
 import pymupdf
 import pytesseract
 import xlrd
 from docx import Document
+from docx.oxml.ns import qn
+from docx.table import Table
+from docx.text.paragraph import Paragraph
 from loguru import logger
 from PIL import Image
 
 from app.core.config import Settings, get_settings
 
 SUPPORTED_EXTENSIONS = frozenset({".pdf", ".doc", ".docx", ".xls", ".xlsx"})
+
+# Numbered list markers: "1.", "2)", "12."
+_NUMBERED_ITEM_RE = re.compile(r"^\d+[.)]\s+")
+_HEADING_STYLE_RE = re.compile(r"^Heading\s+(\d+)$", re.IGNORECASE)
 
 
 class ExtractionError(RuntimeError):
@@ -30,7 +39,15 @@ class TextExtractor:
         if self.settings.tesseract_cmd:
             pytesseract.pytesseract.tesseract_cmd = self.settings.tesseract_cmd
 
-    def extract(self, filename: str, data: bytes) -> list[str]:
+    def extract(self, filename: str, data: bytes) -> list[str] | list[dict[str, Any]]:
+        """Extract text blocks from a file.
+
+        DOCX/DOC return structured blocks::
+
+            {"type": "heading"|"list"|"text"|"table", "content": str, "level": int}
+
+        Other formats return plain ``list[str]``.
+        """
         ext = Path(filename).suffix.lower()
         logger.info(
             "Extract start | file={!r} ext={} bytes={}",
@@ -47,7 +64,7 @@ class TextExtractor:
             raise ExtractionError("Empty file")
 
         if ext == ".pdf":
-            blocks = self._extract_pdf(data)
+            blocks: list[str] | list[dict[str, Any]] = self._extract_pdf(data)
         elif ext == ".docx":
             blocks = self._extract_docx(data)
         elif ext == ".doc":
@@ -63,7 +80,10 @@ class TextExtractor:
             "Extract done | file={!r} blocks={} chars={}",
             filename,
             len(blocks),
-            sum(len(b) for b in blocks),
+            sum(
+                len(b if isinstance(b, str) else str(b.get("content", "")))
+                for b in blocks
+            ),
         )
         return blocks
 
@@ -110,38 +130,114 @@ class TextExtractor:
         except Exception as exc:  # noqa: BLE001
             raise ExtractionError(f"OCR failed: {exc}") from exc
 
-    def _extract_docx(self, data: bytes) -> list[str]:
+    def _extract_docx(self, data: bytes) -> list[dict[str, Any]]:
         try:
             document = Document(io.BytesIO(data))
         except Exception as exc:  # noqa: BLE001
             raise ExtractionError(f"Failed to open DOCX: {exc}") from exc
 
-        parts: list[str] = []
-        for paragraph in document.paragraphs:
-            text = paragraph.text.strip()
-            if text:
-                parts.append(text)
+        parts: list[dict[str, Any]] = []
+        table_index = 0
 
-        for table_index, table in enumerate(document.tables, start=1):
-            rows: list[str] = []
-            for row in table.rows:
-                cells = [
-                    cell.text.strip() for cell in row.cells if cell.text.strip()
-                ]
-                if cells:
-                    rows.append(" | ".join(cells))
-            if rows:
-                parts.append(f"[Таблица {table_index}]\n" + "\n".join(rows))
+        for block in self._iter_docx_blocks(document):
+            if isinstance(block, Paragraph):
+                item = self._paragraph_to_block(block)
+                if item is not None:
+                    parts.append(item)
+            elif isinstance(block, Table):
+                table_index += 1
+                table_text = self._table_to_text(block, table_index)
+                if table_text:
+                    parts.append(
+                        {
+                            "type": "table",
+                            "content": table_text,
+                            "level": 0,
+                        }
+                    )
 
         if not parts:
             raise ExtractionError("No text could be extracted from DOCX")
         logger.debug(
-            "DOCX parsed | paragraphs+tables blocks={}",
+            "DOCX parsed | structured blocks={} headings={}",
             len(parts),
+            sum(1 for p in parts if p["type"] == "heading"),
         )
         return parts
 
-    def _extract_doc(self, data: bytes) -> list[str]:
+    @staticmethod
+    def _iter_docx_blocks(document: Document):
+        """Yield paragraphs and tables in document order."""
+        # Prefer modern API when available (python-docx >= 1.1).
+        iter_inner = getattr(document, "iter_inner_content", None)
+        if callable(iter_inner):
+            yield from iter_inner()
+            return
+
+        body = document.element.body
+        for child in body.iterchildren():
+            tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+            if tag == "p":
+                yield Paragraph(child, document)
+            elif tag == "tbl":
+                yield Table(child, document)
+
+    @staticmethod
+    def _paragraph_to_block(paragraph: Paragraph) -> dict[str, Any] | None:
+        text = (paragraph.text or "").strip()
+        if not text:
+            return None
+
+        style_name = ""
+        try:
+            if paragraph.style is not None and paragraph.style.name:
+                style_name = str(paragraph.style.name)
+        except (AttributeError, ValueError):
+            style_name = ""
+
+        heading_match = _HEADING_STYLE_RE.match(style_name)
+        if heading_match or style_name.lower() in {"title", "subtitle"}:
+            level = int(heading_match.group(1)) if heading_match else 1
+            return {"type": "heading", "content": text, "level": level}
+
+        style_lower = style_name.lower()
+        is_numbered_style = style_lower.startswith("list number") or (
+            "list number" in style_lower
+        )
+        has_num_pr = TextExtractor._paragraph_has_num_pr(paragraph)
+        if (
+            _NUMBERED_ITEM_RE.match(text)
+            or is_numbered_style
+            or has_num_pr
+        ):
+            return {"type": "list", "content": text, "level": 0}
+
+        return {"type": "text", "content": text, "level": 0}
+
+    @staticmethod
+    def _paragraph_has_num_pr(paragraph: Paragraph) -> bool:
+        try:
+            p_pr = paragraph._element.find(qn("w:pPr"))
+            if p_pr is None:
+                return False
+            return p_pr.find(qn("w:numPr")) is not None
+        except Exception:  # noqa: BLE001
+            return False
+
+    @staticmethod
+    def _table_to_text(table: Table, table_index: int) -> str:
+        rows: list[str] = []
+        for row in table.rows:
+            cells = [
+                cell.text.strip() for cell in row.cells if cell.text.strip()
+            ]
+            if cells:
+                rows.append(" | ".join(cells))
+        if not rows:
+            return ""
+        return f"[Таблица {table_index}]\n" + "\n".join(rows)
+
+    def _extract_doc(self, data: bytes) -> list[dict[str, Any]]:
         logger.info(
             "Converting .doc via LibreOffice | path={}",
             self.settings.libreoffice_path,
@@ -189,7 +285,10 @@ class TextExtractor:
                     "Failed to convert .doc via LibreOffice"
                     + (f": {stderr}" if stderr else "")
                 )
-            logger.info("LibreOffice convert ok | bytes={}", converted.stat().st_size)
+            logger.info(
+                "LibreOffice convert ok | bytes={}",
+                converted.stat().st_size,
+            )
             return self._extract_docx(converted.read_bytes())
 
     def _extract_xlsx(self, data: bytes) -> list[str]:

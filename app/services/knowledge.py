@@ -1,6 +1,7 @@
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.tags import extract_chunk_system_meta
 from app.dao.knowledge import KnowledgeDAO
 from app.models.kb import KBDocument
 from app.schemas import (
@@ -104,17 +105,24 @@ class KnowledgeService:
             limit=payload.limit,
             filter_tags=payload.filter_tags,
         )
-        hits = [
-            KnowledgeSearchHit(
-                document_id=document.id,
-                document_title=document.title,
-                chunk_id=chunk.id,
-                content=chunk.content,
-                distance=distance,
-                tags=chunk.tags,
+        hits = []
+        for chunk, document, distance in rows:
+            chunk_index, section_title, is_heading_only = (
+                extract_chunk_system_meta(chunk.tags)
             )
-            for chunk, document, distance in rows
-        ]
+            hits.append(
+                KnowledgeSearchHit(
+                    document_id=document.id,
+                    document_title=document.title,
+                    chunk_id=chunk.id,
+                    content=chunk.content,
+                    distance=distance,
+                    tags=chunk.tags,
+                    chunk_index=chunk_index,
+                    section_title=section_title,
+                    is_heading_only=is_heading_only,
+                )
+            )
         logger.info(
             "Search done | specialist_id={} hits={}",
             payload.specialist_id,

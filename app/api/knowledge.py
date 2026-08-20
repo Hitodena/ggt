@@ -30,7 +30,7 @@ from app.schemas import (
 from app.services.answer import AnswerService
 from app.services.embeddings import EmbeddingError
 from app.services.knowledge import KnowledgeService
-from app.services.upload import UploadError, UploadService
+from app.services.upload import UploadError, UploadService, parse_upload_tags
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
@@ -118,19 +118,32 @@ async def create_from_message(
     description=(
         "Extract text from pdf/doc/docx/xls/xlsx, chunk, embed, and store. "
         "Technical metadata is stored under `tags.system` "
-        "(`filename`, `content_type`) and does **not** hide chunks from "
-        "search."
+        "(`filename`, `content_type`, chunk metadata) and does **not** hide "
+        "chunks from search. Optional multipart `tags` field accepts a JSON "
+        "object/array (e.g. audience filters)."
     ),
 )
 async def upload_knowledge(
     specialist_id: str = Form(..., min_length=1),
     title: str | None = Form(None),
+    tags: str | None = Form(
+        None,
+        description=(
+            'Optional JSON tags, e.g. '
+            '`{"audience": {"gender": "male"}}` or `{"system": {"labels": ["x"]}}`'
+        ),
+    ),
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_session),
 ) -> KnowledgeUploadResponse:
     settings = get_settings()
     data = await file.read()
     filename = normalize_upload_filename(file.filename)
+    title_norm = (
+        normalize_upload_filename(title, fallback="") if title else None
+    )
+    if title_norm == "":
+        title_norm = None
     logger.info(
         "API upload | specialist_id={} filename={!r} content_type={} "
         "bytes={} title={!r}",
@@ -138,7 +151,7 @@ async def upload_knowledge(
         filename,
         file.content_type,
         len(data),
-        title,
+        title_norm,
     )
     if len(data) > settings.max_upload_bytes:
         logger.warning(
@@ -151,6 +164,11 @@ async def upload_knowledge(
             detail=f"File exceeds max size of {settings.max_upload_size_mb} MB",
         )
 
+    try:
+        parsed_tags = parse_upload_tags(tags)
+    except UploadError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     service = UploadService(session, settings=settings)
     try:
         document, job_id = await service.upload(
@@ -158,10 +176,15 @@ async def upload_knowledge(
             filename=filename,
             data=data,
             content_type=file.content_type,
-            title=title,
+            title=title_norm,
+            tags=parsed_tags,
         )
     except UploadError as exc:
-        logger.warning("API upload failed | specialist_id={} err={}", specialist_id, exc)
+        logger.warning(
+            "API upload failed | specialist_id={} err={}",
+            specialist_id,
+            exc,
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     logger.info(

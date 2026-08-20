@@ -18,6 +18,43 @@ def new_id() -> str:
 
 class KnowledgeDAO:
     @staticmethod
+    def _merge_chunk_tags(
+        base_tags: dict[str, Any] | None,
+        chunk_tags: list[str] | dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Merge document-level tags with per-chunk system metadata."""
+        normalized_chunk = normalize_knowledge_tags(chunk_tags)
+        if base_tags is None:
+            return normalized_chunk
+        if normalized_chunk is None:
+            return base_tags
+
+        merged: dict[str, Any] = dict(base_tags)
+        base_system = (
+            dict(base_tags["system"])
+            if isinstance(base_tags.get("system"), dict)
+            else {}
+        )
+        chunk_system = (
+            dict(normalized_chunk["system"])
+            if isinstance(normalized_chunk.get("system"), dict)
+            else {}
+        )
+        if base_system or chunk_system:
+            merged["system"] = {**base_system, **chunk_system}
+
+        if "audience" in normalized_chunk:
+            merged["audience"] = normalized_chunk["audience"]
+        elif "audience" in base_tags:
+            merged["audience"] = base_tags["audience"]
+
+        for key, value in normalized_chunk.items():
+            if key in {"system", "audience"}:
+                continue
+            merged[key] = value
+        return merged or None
+
+    @staticmethod
     async def get_by_origin_message(
         session: AsyncSession,
         *,
@@ -88,7 +125,8 @@ class KnowledgeDAO:
         *,
         specialist_id: str,
         title: str,
-        chunks: list[tuple[str, list[float]]],
+        chunks: list[tuple[str, list[float]]]
+        | list[tuple[str, list[float], dict[str, Any] | list[Any] | None]],
         source_type: str,
         source_origin: str,
         origin_message_id: str | None = None,
@@ -108,9 +146,15 @@ class KnowledgeDAO:
         )
         session.add(document)
 
-        normalized_tags = normalize_knowledge_tags(tags)
+        base_tags = normalize_knowledge_tags(tags)
         chunk_ids: list[str] = []
-        for content, embedding in chunks:
+        for item in chunks:
+            if len(item) == 3:
+                content, embedding, chunk_tags = item  # type: ignore[misc]
+            else:
+                content, embedding = item  # type: ignore[misc]
+                chunk_tags = base_tags
+            merged_tags = KnowledgeDAO._merge_chunk_tags(base_tags, chunk_tags)
             chunk_id = new_id()
             chunk_ids.append(chunk_id)
             session.add(
@@ -119,7 +163,7 @@ class KnowledgeDAO:
                     specialist_id=specialist_id,
                     document_id=document_id,
                     content=content,
-                    tags=normalized_tags,
+                    tags=merged_tags,
                     embedding=embedding,
                 )
             )

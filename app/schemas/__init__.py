@@ -24,6 +24,7 @@ _FILTER_TAGS_DESCRIPTION = (
 
 class KnowledgeCreate(BaseModel):
     model_config = ConfigDict(
+        extra="ignore",
         json_schema_extra={
             "examples": [
                 {
@@ -37,7 +38,7 @@ class KnowledgeCreate(BaseModel):
                     },
                 }
             ]
-        }
+        },
     )
 
     specialist_id: str = Field(..., min_length=1)
@@ -57,6 +58,7 @@ class KnowledgeCreate(BaseModel):
 
 class KnowledgeFromMessage(BaseModel):
     model_config = ConfigDict(
+        extra="ignore",
         json_schema_extra={
             "examples": [
                 {
@@ -67,7 +69,7 @@ class KnowledgeFromMessage(BaseModel):
                     "tags": None,
                 }
             ]
-        }
+        },
     )
 
     specialist_id: str = Field(..., min_length=1)
@@ -85,6 +87,7 @@ class KnowledgeFromMessage(BaseModel):
 
 class KnowledgeSearchRequest(BaseModel):
     model_config = ConfigDict(
+        extra="ignore",
         json_schema_extra={
             "examples": [
                 {
@@ -101,7 +104,7 @@ class KnowledgeSearchRequest(BaseModel):
                     },
                 },
             ]
-        }
+        },
     )
 
     specialist_id: str = Field(..., min_length=1)
@@ -116,6 +119,7 @@ class KnowledgeSearchRequest(BaseModel):
 
 class KnowledgeAnswerRequest(BaseModel):
     model_config = ConfigDict(
+        extra="ignore",
         json_schema_extra={
             "examples": [
                 {
@@ -132,7 +136,7 @@ class KnowledgeAnswerRequest(BaseModel):
                     },
                 },
             ]
-        }
+        },
     )
 
     specialist_id: str = Field(..., min_length=1)
@@ -180,6 +184,18 @@ class KnowledgeSearchHit(BaseModel):
     tags: list[str] | dict[str, Any] | None = Field(
         default=None,
         description=_TAGS_DESCRIPTION,
+    )
+    chunk_index: int | None = Field(
+        default=None,
+        description="0-based chunk order within the source document.",
+    )
+    section_title: str | None = Field(
+        default=None,
+        description="Heading/section title for this chunk when available.",
+    )
+    is_heading_only: bool | None = Field(
+        default=None,
+        description="True when the chunk is only a heading with no body.",
     )
 
 

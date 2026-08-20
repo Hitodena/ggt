@@ -1,4 +1,8 @@
+from __future__ import annotations
+
+import json
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,7 +11,7 @@ from app.core.config import Settings, get_settings
 from app.core.filenames import normalize_upload_filename
 from app.dao.knowledge import KnowledgeDAO
 from app.models.kb import KBDocument
-from app.services.chunking import chunk_text
+from app.services.chunking import chunk_text, chunk_text_structured
 from app.services.embeddings import EmbeddingService
 from app.services.extraction import ExtractionError, TextExtractor
 
@@ -38,6 +42,7 @@ class UploadService:
         data: bytes,
         content_type: str | None = None,
         title: str | None = None,
+        tags: dict[str, Any] | list[Any] | None = None,
     ) -> tuple[KBDocument, str]:
         if not specialist_id.strip():
             raise UploadError("specialist_id is required")
@@ -49,6 +54,14 @@ class UploadService:
             )
 
         safe_name = normalize_upload_filename(filename)
+        safe_title = (
+            normalize_upload_filename(title, fallback="")
+            if title
+            else None
+        )
+        if safe_title == "":
+            safe_title = None
+
         logger.info(
             "Upload start | specialist_id={} file={!r} bytes={} content_type={}",
             specialist_id,
@@ -77,7 +90,10 @@ class UploadService:
                 "Upload extracted | job_id={} blocks={} chars={}",
                 job.id,
                 len(blocks),
-                sum(len(b) for b in blocks),
+                sum(
+                    len(b if isinstance(b, str) else str(b.get("content", "")))
+                    for b in blocks
+                ),
             )
 
             await KnowledgeDAO.update_import_job(
@@ -86,13 +102,13 @@ class UploadService:
                 step="chunking",
                 progress_pct=40,
             )
-            chunks = chunk_text(blocks, settings=self.settings)
-            if not chunks:
+            chunk_payloads = self._build_chunks(blocks)
+            if not chunk_payloads:
                 raise UploadError("No text chunks produced from file")
             logger.info(
                 "Upload chunked | job_id={} chunks={}",
                 job.id,
-                len(chunks),
+                len(chunk_payloads),
             )
 
             await KnowledgeDAO.update_import_job(
@@ -101,12 +117,27 @@ class UploadService:
                 step="embedding",
                 progress_pct=60,
             )
-            embedded: list[tuple[str, list[float]]] = []
-            for index, chunk in enumerate(chunks):
-                vector = await self.embeddings.embed(chunk)
-                embedded.append((chunk, vector))
-                if chunks and index % max(1, len(chunks) // 5) == 0:
-                    progress = 60 + int(30 * (index + 1) / len(chunks))
+            embedded: list[
+                tuple[str, list[float], dict[str, Any] | None]
+            ] = []
+            total = len(chunk_payloads)
+            for index, payload in enumerate(chunk_payloads):
+                vector = await self.embeddings.embed(payload["content"])
+                meta = payload.get("metadata") or {}
+                chunk_tags: dict[str, Any] | None = None
+                if meta:
+                    chunk_tags = {
+                        "system": {
+                            "chunk_index": meta.get("chunk_index", index),
+                            "section_title": meta.get("section_title"),
+                            "is_heading_only": bool(
+                                meta.get("is_heading_only")
+                            ),
+                        }
+                    }
+                embedded.append((payload["content"], vector, chunk_tags))
+                if total and index % max(1, total // 5) == 0:
+                    progress = 60 + int(30 * (index + 1) / total)
                     await KnowledgeDAO.update_import_job(
                         self.session,
                         job.id,
@@ -116,10 +147,17 @@ class UploadService:
                         "Upload embedding progress | job_id={} {}/{}",
                         job.id,
                         index + 1,
-                        len(chunks),
+                        total,
                     )
 
-            doc_title = (title or Path(safe_name).stem).strip() or safe_name
+            doc_title = (
+                (safe_title or Path(safe_name).stem).strip() or safe_name
+            )
+            document_tags = self._merge_upload_tags(
+                tags,
+                filename=safe_name,
+                content_type=content_type,
+            )
             document = await KnowledgeDAO.create_document_with_chunks(
                 self.session,
                 specialist_id=specialist_id,
@@ -127,12 +165,7 @@ class UploadService:
                 chunks=embedded,
                 source_type="file_upload",
                 source_origin=safe_name,
-                tags={
-                    "system": {
-                        "filename": safe_name,
-                        "content_type": content_type,
-                    }
-                },
+                tags=document_tags,
             )
 
             await KnowledgeDAO.update_import_job(
@@ -173,3 +206,75 @@ class UploadService:
                 error_message=str(exc),
             )
             raise UploadError(f"Upload failed: {exc}") from exc
+
+    def _build_chunks(
+        self,
+        blocks: list[str] | list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if (
+            isinstance(blocks, list)
+            and blocks
+            and isinstance(blocks[0], dict)
+            and "content" in blocks[0]
+        ):
+            return chunk_text_structured(blocks, settings=self.settings)
+
+        plain = chunk_text(blocks, settings=self.settings)  # type: ignore[arg-type]
+        return [
+            {
+                "content": content,
+                "metadata": {
+                    "chunk_index": index,
+                    "section_title": None,
+                    "is_heading_only": False,
+                },
+            }
+            for index, content in enumerate(plain)
+        ]
+
+    @staticmethod
+    def _merge_upload_tags(
+        tags: dict[str, Any] | list[Any] | None,
+        *,
+        filename: str,
+        content_type: str | None,
+    ) -> dict[str, Any]:
+        system: dict[str, Any] = {
+            "filename": filename,
+            "content_type": content_type,
+        }
+        if tags is None:
+            return {"system": system}
+        if isinstance(tags, list):
+            labels = [str(item) for item in tags if str(item).strip()]
+            if labels:
+                system["labels"] = labels
+            return {"system": system}
+        if not isinstance(tags, dict):
+            return {"system": system}
+
+        merged = dict(tags)
+        existing_system = merged.get("system")
+        if isinstance(existing_system, dict):
+            system = {**system, **existing_system}
+            # Keep upload filename/content_type authoritative for file origin.
+            system["filename"] = filename
+            system["content_type"] = content_type
+        merged["system"] = system
+        return merged
+
+
+def parse_upload_tags(raw: str | None) -> dict[str, Any] | list[Any] | None:
+    """Parse optional multipart ``tags`` JSON field."""
+    if raw is None:
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise UploadError(f"Invalid tags JSON: {exc}") from exc
+    if isinstance(parsed, (dict, list)):
+        return parsed
+    raise UploadError("tags must be a JSON object or array")
