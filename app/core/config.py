@@ -64,6 +64,7 @@ class Settings(BaseSettings):
 
     chunk_size: int = 1500
     chunk_overlap: int = 200
+    search_max_distance: float | None = 0.62
 
     app_env: str = "dev"
     log_level: str = "INFO"

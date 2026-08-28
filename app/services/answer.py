@@ -3,6 +3,7 @@ from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.core.search_relevance import search_hit_is_relevant
 from app.core.tags import extract_chunk_system_meta
 from app.dao.knowledge import KnowledgeDAO
 from app.schemas import (
@@ -69,6 +70,14 @@ class AnswerService:
         )
         sources = []
         for chunk, document, distance in rows:
+            if not search_hit_is_relevant(
+                query=payload.query,
+                document_title=document.title,
+                content=chunk.content,
+                distance=distance,
+                max_distance=self.settings.search_max_distance,
+            ):
+                continue
             chunk_index, section_title, is_heading_only = (
                 extract_chunk_system_meta(chunk.tags)
             )

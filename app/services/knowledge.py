@@ -1,6 +1,8 @@
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import Settings, get_settings
+from app.core.search_relevance import search_hit_is_relevant
 from app.core.tags import extract_chunk_system_meta
 from app.dao.knowledge import KnowledgeDAO
 from app.models.kb import KBDocument
@@ -18,10 +20,13 @@ class KnowledgeService:
     def __init__(
         self,
         session: AsyncSession,
+        *,
         embeddings: EmbeddingService | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self.session = session
-        self.embeddings = embeddings or EmbeddingService()
+        self.settings = settings or get_settings()
+        self.embeddings = embeddings or EmbeddingService(self.settings)
 
     async def create(self, payload: KnowledgeCreate) -> KBDocument:
         logger.info(
@@ -107,6 +112,14 @@ class KnowledgeService:
         )
         hits = []
         for chunk, document, distance in rows:
+            if not search_hit_is_relevant(
+                query=payload.query,
+                document_title=document.title,
+                content=chunk.content,
+                distance=distance,
+                max_distance=self.settings.search_max_distance,
+            ):
+                continue
             chunk_index, section_title, is_heading_only = (
                 extract_chunk_system_meta(chunk.tags)
             )
