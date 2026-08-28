@@ -56,8 +56,11 @@ def search_hit_is_relevant(
     if not query_seasons:
         return True
 
-    hit_text = f"{document_title}\n{content}"
-    return bool(query_seasons & _seasons_in_text(hit_text))
+    title_seasons = _seasons_in_text(document_title)
+    if title_seasons:
+        return bool(query_seasons & title_seasons)
+
+    return bool(query_seasons & _seasons_in_text(content))
 
 
 def _seasons_in_text(text: str) -> set[str]:

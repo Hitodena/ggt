@@ -21,7 +21,10 @@ def test_rejects_wrong_season_even_when_embedding_is_close() -> None:
         search_hit_is_relevant(
             query="Уход за кожей зимой",
             document_title="Уход за кожей летом",
-            content="Правила использования солнцезащитных средств",
+            content=(
+                "Правила использования солнцезащитных средств\n"
+                "Агрессивные процедуры откладываем на осенне-зимний период."
+            ),
             distance=0.3895,
             max_distance=0.62,
         )
