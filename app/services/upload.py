@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.filenames import normalize_upload_filename
+from app.core.tags import normalize_knowledge_tags
 from app.dao.knowledge import KnowledgeDAO
 from app.models.kb import KBDocument
 from app.services.chunking import chunk_text, chunk_text_structured
@@ -102,7 +103,7 @@ class UploadService:
                 step="chunking",
                 progress_pct=40,
             )
-            chunk_payloads = self._build_chunks(blocks)
+            chunk_payloads = self._build_chunks(blocks, filename=safe_name)
             if not chunk_payloads:
                 raise UploadError("No text chunks produced from file")
             logger.info(
@@ -158,15 +159,37 @@ class UploadService:
                 filename=safe_name,
                 content_type=content_type,
             )
-            document = await KnowledgeDAO.create_document_with_chunks(
+            existing = await KnowledgeDAO.get_by_source_origin(
                 self.session,
                 specialist_id=specialist_id,
-                title=doc_title,
-                chunks=embedded,
-                source_type="file_upload",
                 source_origin=safe_name,
-                tags=document_tags,
             )
+            if existing is not None:
+                logger.info(
+                    "Upload upsert | job_id={} existing_document_id={} "
+                    "file={!r}",
+                    job.id,
+                    existing.id,
+                    safe_name,
+                )
+                document = await KnowledgeDAO.replace_document_chunks(
+                    self.session,
+                    document_id=existing.id,
+                    title=doc_title,
+                    chunks=embedded,
+                    tags=document_tags,
+                    specialist_id=specialist_id,
+                )
+            else:
+                document = await KnowledgeDAO.create_document_with_chunks(
+                    self.session,
+                    specialist_id=specialist_id,
+                    title=doc_title,
+                    chunks=embedded,
+                    source_type="file_upload",
+                    source_origin=safe_name,
+                    tags=document_tags,
+                )
 
             await KnowledgeDAO.update_import_job(
                 self.session,
@@ -210,7 +233,28 @@ class UploadService:
     def _build_chunks(
         self,
         blocks: list[str] | list[dict[str, Any]],
+        *,
+        filename: str | None = None,
     ) -> list[dict[str, Any]]:
+        # TXT: store the entire file as one chunk (no size-based splitting).
+        if filename and Path(filename).suffix.lower() == ".txt":
+            if not blocks:
+                return []
+            first = blocks[0]
+            text = first if isinstance(first, str) else str(first.get("content", ""))
+            if not text.strip():
+                return []
+            return [
+                {
+                    "content": text,
+                    "metadata": {
+                        "chunk_index": 0,
+                        "section_title": None,
+                        "is_heading_only": False,
+                    },
+                }
+            ]
+
         if (
             isinstance(blocks, list)
             and blocks
@@ -245,21 +289,25 @@ class UploadService:
         }
         if tags is None:
             return {"system": system}
-        if isinstance(tags, list):
-            labels = [str(item) for item in tags if str(item).strip()]
-            if labels:
-                system["labels"] = labels
-            return {"system": system}
-        if not isinstance(tags, dict):
+
+        normalized = normalize_knowledge_tags(tags)
+        if normalized is None:
             return {"system": system}
 
-        merged = dict(tags)
+        merged = dict(normalized)
         existing_system = merged.get("system")
         if isinstance(existing_system, dict):
-            system = {**system, **existing_system}
-            # Keep upload filename/content_type authoritative for file origin.
-            system["filename"] = filename
-            system["content_type"] = content_type
+            system = {
+                **system,
+                **{
+                    key: value
+                    for key, value in existing_system.items()
+                    if key != "labels"
+                },
+            }
+        # Keep upload filename/content_type authoritative for file origin.
+        system["filename"] = filename
+        system["content_type"] = content_type
         merged["system"] = system
         return merged
 

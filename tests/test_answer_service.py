@@ -121,7 +121,7 @@ async def test_answer_passes_filter_tags() -> None:
             embeddings=embeddings,
             client=client,
         )
-        filter_tags = {"audience": {"gender": "male", "age_min": 40}}
+        filter_tags = {"audience": ["sex:male", "age_bucket:40_plus"]}
         result = await service.answer(
             KnowledgeAnswerRequest(
                 specialist_id="spec-1",

@@ -147,7 +147,7 @@ async def test_search_passes_filter_tags() -> None:
     knowledge_mod.KnowledgeDAO.search_similar = staticmethod(fake_search)
     try:
         service = KnowledgeService(session, embeddings=embeddings)
-        filter_tags = {"audience": {"gender": "male", "age_min": 40}}
+        filter_tags = {"audience": ["sex:male", "age_bucket:40_plus"]}
         await service.search(
             KnowledgeSearchRequest(
                 specialist_id="spec-1",

@@ -3,22 +3,35 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+_TAGS_EXAMPLE = {
+    "audience": ["sex:female", "age_bucket:26_35", "age_bucket:36_45"],
+    "clinical": ["procedure:rf_face"],
+    "labels": ["manual:spf_лето"],
+}
+
 _TAGS_DESCRIPTION = (
-    "Preferred shape: `{\"system\": {...}, \"audience\": {...}}`. "
-    "`system` is technical metadata and does not hide the chunk. "
-    "`audience` marks a segment note (e.g. men 40+) and hides it from "
-    "default search/answer unless `filter_tags.audience` matches. "
-    "A flat object without `system`/`audience` is stored as `audience`."
+    "Preferred shape: "
+    '`{"audience": ["sex:female", ...], "clinical": ["procedure:..."], '
+    '"labels": ["manual:..."]}`. '
+    "Each category is a flat list of strings (no whitelist). "
+    "`system` may hold technical metadata (filename, chunk_index) and does "
+    "not hide the chunk. "
+    "`audience` marks a segment note and hides it from default search/answer "
+    "unless `filter_tags.audience` matches. "
+    "A plain list is stored as `labels`. "
+    "Legacy dict audience values are coerced to `key:value` strings."
 )
 
 _FILTER_TAGS_DESCRIPTION = (
-    "Optional audience filter. "
-    "Without `filter_tags` / `filter_tags.audience`, chunks that have "
+    "Optional tag filter with flat string lists. "
+    "Without `filter_tags.audience`, chunks that have a non-empty "
     "`tags.audience` are excluded. "
     "With `filter_tags.audience`, returns general chunks (no audience) "
-    "plus chunks whose `tags.audience` contains this object "
-    "(JSONB containment). "
-    "Example: `{\"audience\": {\"gender\": \"male\", \"age_min\": 40}}`."
+    "plus chunks whose `tags.audience` contains all filter strings "
+    "(JSONB array containment). "
+    "Optional `clinical` / `labels` filters further AND-restrict results. "
+    'Example: `{"audience": ["sex:female", "age_bucket:26_35"], '
+    '"clinical": ["procedure:rf_face"]}`.'
 )
 
 
@@ -29,13 +42,11 @@ class KnowledgeCreate(BaseModel):
             "examples": [
                 {
                     "specialist_id": "spec-1",
-                    "title": "Протокол для мужчин 40+",
-                    "content": "Рекомендации только для мужчин от 40 лет...",
+                    "title": "Протокол SPF лето",
+                    "content": "Рекомендации по SPF для женщин 26–45...",
                     "source_type": "manual",
                     "source_origin": "api",
-                    "tags": {
-                        "audience": {"gender": "male", "age_min": 40},
-                    },
+                    "tags": _TAGS_EXAMPLE,
                 }
             ]
         },
@@ -49,10 +60,7 @@ class KnowledgeCreate(BaseModel):
     tags: list[str] | dict[str, Any] | None = Field(
         default=None,
         description=_TAGS_DESCRIPTION,
-        examples=[
-            {"audience": {"gender": "male", "age_min": 40}},
-            {"system": {"labels": ["protocol"]}, "audience": {"gender": "male"}},
-        ],
+        examples=[_TAGS_EXAMPLE, ["manual:spf_лето"]],
     )
 
 
@@ -81,7 +89,7 @@ class KnowledgeFromMessage(BaseModel):
     tags: list[str] | dict[str, Any] | None = Field(
         default=None,
         description=_TAGS_DESCRIPTION,
-        examples=[{"audience": {"gender": "male", "age_min": 40}}],
+        examples=[_TAGS_EXAMPLE],
     )
 
 
@@ -100,7 +108,7 @@ class KnowledgeSearchRequest(BaseModel):
                     "query": "протокол",
                     "limit": 5,
                     "filter_tags": {
-                        "audience": {"gender": "male", "age_min": 40},
+                        "audience": ["sex:female", "age_bucket:26_35"],
                     },
                 },
             ]
@@ -113,7 +121,12 @@ class KnowledgeSearchRequest(BaseModel):
     filter_tags: dict[str, Any] | None = Field(
         default=None,
         description=_FILTER_TAGS_DESCRIPTION,
-        examples=[{"audience": {"gender": "male", "age_min": 40}}],
+        examples=[
+            {
+                "audience": ["sex:female", "age_bucket:26_35"],
+                "clinical": ["procedure:rf_face"],
+            }
+        ],
     )
 
 
@@ -132,7 +145,7 @@ class KnowledgeAnswerRequest(BaseModel):
                     "query": "какой протокол подходит?",
                     "limit": 5,
                     "filter_tags": {
-                        "audience": {"gender": "male", "age_min": 40},
+                        "audience": ["sex:female", "age_bucket:26_35"],
                     },
                 },
             ]
@@ -145,7 +158,11 @@ class KnowledgeAnswerRequest(BaseModel):
     filter_tags: dict[str, Any] | None = Field(
         default=None,
         description=_FILTER_TAGS_DESCRIPTION,
-        examples=[{"audience": {"gender": "male", "age_min": 40}}],
+        examples=[
+            {
+                "audience": ["sex:female", "age_bucket:26_35"],
+            }
+        ],
     )
 
 

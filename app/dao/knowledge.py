@@ -1,15 +1,22 @@
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
 from loguru import logger
-from sqlalchemy import delete, func, or_, select, type_coerce
+from sqlalchemy import and_, delete, func, or_, select, type_coerce
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql import ColumnElement
 
+from app.core.tags import (
+    extract_filter_audience,
+    extract_filter_list,
+    normalize_knowledge_tags,
+)
 from app.models.kb import KBChunk, KBDocument, KBImportJob, KBUsageEvent
-from app.core.tags import extract_filter_audience, normalize_knowledge_tags
+
+_TAG_LIST_KEYS = ("audience", "clinical", "labels")
 
 
 def new_id() -> str:
@@ -43,13 +50,14 @@ class KnowledgeDAO:
         if base_system or chunk_system:
             merged["system"] = {**base_system, **chunk_system}
 
-        if "audience" in normalized_chunk:
-            merged["audience"] = normalized_chunk["audience"]
-        elif "audience" in base_tags:
-            merged["audience"] = base_tags["audience"]
+        for key in _TAG_LIST_KEYS:
+            if key in normalized_chunk:
+                merged[key] = normalized_chunk[key]
+            elif key in base_tags:
+                merged[key] = base_tags[key]
 
         for key, value in normalized_chunk.items():
-            if key in {"system", "audience"}:
+            if key in {"system", *_TAG_LIST_KEYS}:
                 continue
             merged[key] = value
         return merged or None
@@ -68,6 +76,27 @@ class KnowledgeDAO:
                 KBDocument.origin_message_id == origin_message_id,
             )
             .options(selectinload(KBDocument.chunks))
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_by_source_origin(
+        session: AsyncSession,
+        *,
+        specialist_id: str,
+        source_origin: str,
+    ) -> KBDocument | None:
+        """Find a file-upload document by specialist + original filename."""
+        stmt = (
+            select(KBDocument)
+            .where(
+                KBDocument.specialist_id == specialist_id,
+                KBDocument.source_origin == source_origin,
+            )
+            .options(selectinload(KBDocument.chunks))
+            .order_by(KBDocument.updated_at.desc())
+            .limit(1)
         )
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
@@ -194,6 +223,83 @@ class KnowledgeDAO:
         return await KnowledgeDAO.get_by_id(session, document_id)  # type: ignore[return-value]
 
     @staticmethod
+    async def replace_document_chunks(
+        session: AsyncSession,
+        *,
+        document_id: str,
+        title: str,
+        chunks: list[tuple[str, list[float]]]
+        | list[tuple[str, list[float], dict[str, Any] | list[Any] | None]],
+        tags: list[str] | dict[str, Any] | None = None,
+        specialist_id: str | None = None,
+    ) -> KBDocument:
+        """Replace all chunks of an existing document (same document id)."""
+        if not chunks:
+            raise ValueError("At least one chunk is required")
+
+        document = await KnowledgeDAO.get_by_id(
+            session,
+            document_id,
+            specialist_id=specialist_id,
+        )
+        if document is None:
+            raise ValueError(f"Document not found: {document_id}")
+
+        await session.execute(
+            delete(KBChunk).where(KBChunk.document_id == document_id)
+        )
+        # Expire cached relationship so reload picks up new chunks.
+        session.expire(document, ["chunks"])
+
+        document.title = title
+        document.updated_at = datetime.now(timezone.utc)
+
+        base_tags = normalize_knowledge_tags(tags)
+        chunk_ids: list[str] = []
+        for item in chunks:
+            if len(item) == 3:
+                content, embedding, chunk_tags = item  # type: ignore[misc]
+            else:
+                content, embedding = item  # type: ignore[misc]
+                chunk_tags = base_tags
+            merged_tags = KnowledgeDAO._merge_chunk_tags(base_tags, chunk_tags)
+            chunk_id = new_id()
+            chunk_ids.append(chunk_id)
+            session.add(
+                KBChunk(
+                    id=chunk_id,
+                    specialist_id=document.specialist_id,
+                    document_id=document_id,
+                    content=content,
+                    tags=merged_tags,
+                    embedding=embedding,
+                )
+            )
+
+        await session.flush()
+        session.add(
+            KBUsageEvent(
+                id=new_id(),
+                specialist_id=document.specialist_id,
+                event_type="knowledge_updated",
+                payload={
+                    "document_id": document_id,
+                    "chunk_ids": chunk_ids,
+                    "source_type": document.source_type,
+                    "source_origin": document.source_origin,
+                },
+            )
+        )
+        await session.commit()
+        logger.info(
+            "DAO replaced document chunks | id={} specialist_id={} chunks={}",
+            document_id,
+            document.specialist_id,
+            len(chunk_ids),
+        )
+        return await KnowledgeDAO.get_by_id(session, document_id)  # type: ignore[return-value]
+
+    @staticmethod
     async def create_document_with_chunk(
         session: AsyncSession,
         *,
@@ -249,28 +355,74 @@ class KnowledgeDAO:
         return True
 
     @staticmethod
+    def _has_nonempty_tag_list(key: str) -> ColumnElement[bool]:
+        """True when ``tags[key]`` is a non-empty JSON array."""
+        tag_value = KBChunk.tags[key]
+        return and_(
+            KBChunk.tags.is_not(None),
+            KBChunk.tags.has_key(key),
+            func.jsonb_typeof(tag_value) == "array",
+            func.jsonb_array_length(tag_value) > 0,
+        )
+
+    @staticmethod
+    def _has_no_tag_list(key: str) -> ColumnElement[bool]:
+        """True when ``tags[key]`` is missing, null, or an empty array."""
+        tag_value = KBChunk.tags[key]
+        return or_(
+            KBChunk.tags.is_(None),
+            ~KBChunk.tags.has_key(key),
+            func.jsonb_typeof(tag_value) == "null",
+            and_(
+                func.jsonb_typeof(tag_value) == "array",
+                func.jsonb_array_length(tag_value) == 0,
+            ),
+        )
+
+    @staticmethod
+    def _tag_visibility_clause(
+        filter_tags: dict[str, Any] | None,
+    ) -> ColumnElement[bool]:
+        """Build SQL visibility rules for flat string-list tags.
+
+        Without audience criteria: hide chunks with a non-empty
+        ``tags.audience`` array.
+        With audience criteria: keep general chunks and chunks whose
+        ``tags.audience`` JSON contains the filter list (``@>``).
+        Optional ``clinical`` / ``labels`` filters AND-restrict further.
+        """
+        audience_filter = extract_filter_audience(filter_tags)
+        has_no_audience = KnowledgeDAO._has_no_tag_list("audience")
+
+        if audience_filter is None:
+            clause: ColumnElement[bool] = has_no_audience
+        else:
+            audience_match = KBChunk.tags["audience"].contains(
+                type_coerce(audience_filter, JSONB)
+            )
+            clause = or_(has_no_audience, audience_match)
+
+        for key in ("clinical", "labels"):
+            filter_list = extract_filter_list(filter_tags, key)
+            if filter_list is None:
+                continue
+            clause = and_(
+                clause,
+                and_(
+                    KnowledgeDAO._has_nonempty_tag_list(key),
+                    KBChunk.tags[key].contains(
+                        type_coerce(filter_list, JSONB)
+                    ),
+                ),
+            )
+        return clause
+
+    # Back-compat alias used by older call sites / tests.
+    @staticmethod
     def _audience_visibility_clause(
         filter_tags: dict[str, Any] | None,
     ) -> ColumnElement[bool]:
-        """Build SQL visibility rules for segment (audience) tags.
-
-        Without audience criteria: hide any chunk that has ``tags.audience``.
-        With audience criteria: keep general chunks and chunks whose
-        ``tags.audience`` JSON contains the filter audience.
-        """
-        audience_filter = extract_filter_audience(filter_tags)
-        has_no_audience = or_(
-            KBChunk.tags.is_(None),
-            ~KBChunk.tags.has_key("audience"),
-            func.jsonb_typeof(KBChunk.tags["audience"]) == "null",
-        )
-        if audience_filter is None:
-            return has_no_audience
-
-        audience_match = KBChunk.tags["audience"].contains(
-            type_coerce(audience_filter, JSONB)
-        )
-        return or_(has_no_audience, audience_match)
+        return KnowledgeDAO._tag_visibility_clause(filter_tags)
 
     @staticmethod
     async def search_similar(
@@ -288,7 +440,7 @@ class KnowledgeDAO:
             .where(
                 KBChunk.specialist_id == specialist_id,
                 KBChunk.embedding.is_not(None),
-                KnowledgeDAO._audience_visibility_clause(filter_tags),
+                KnowledgeDAO._tag_visibility_clause(filter_tags),
             )
             .order_by(distance)
             .limit(limit)

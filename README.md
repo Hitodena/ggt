@@ -9,7 +9,7 @@ for a specialist and can be added from chat via "add to knowledge base".
 - Neon Lakebase Postgres with `pgvector` (`vector(1536)`, HNSW cosine)
 - Existing tables: `kb_documents`, `kb_chunks` (+ captures/imports/usage)
 - OpenAI-compatible embeddings + chat (RAG)
-- File extraction: PDF / DOC / DOCX / XLS / XLSX (+ Tesseract OCR fallback for scanned PDFs)
+- File extraction: PDF / DOC / DOCX / XLS / XLSX / TXT (+ Tesseract OCR fallback for scanned PDFs)
 
 ## Setup
 
@@ -99,7 +99,7 @@ alembic upgrade head
 |--------|------|---------|
 | `POST` | `/knowledge` | Manual add |
 | `POST` | `/knowledge/from-message` | Chat button (idempotent by `message_id`) |
-| `POST` | `/knowledge/upload` | Upload pdf/doc/docx/xls/xlsx → extract → embed |
+| `POST` | `/knowledge/upload` | Upload pdf/doc/docx/xls/xlsx/txt (+ optional tags); same filename → replace |
 | `POST` | `/knowledge/search` | Semantic search (raw chunks) |
 | `POST` | `/knowledge/answer` | RAG: search + chat model answer |
 | `GET` | `/knowledge?specialist_id=` | List |
@@ -125,8 +125,12 @@ curl -X POST http://127.0.0.1:8000/knowledge/from-message \
 curl -X POST http://127.0.0.1:8000/knowledge/upload \
   -F "specialist_id=spec-1" \
   -F "title=Протокол после процедур" \
-  -F "file=@./protocol.pdf"
+  -F "file=@./protocol.pdf" \
+  -F 'tags={"audience":["sex:female","age_bucket:26_35"],"clinical":["procedure:rf_face"],"labels":["manual:spf_лето"]}'
 ```
+
+Re-uploading the same filename for the same specialist replaces the existing
+document (same id, new chunks/embeddings/tags).
 
 ### Search
 
@@ -140,8 +144,10 @@ curl -X POST http://127.0.0.1:8000/knowledge/search \
   }"
 ```
 
-Segmented notes use `tags.audience` and are hidden from default search.
-Pass `filter_tags` to include them (together with general notes):
+Segmented notes use `tags.audience` (flat string list) and are hidden from
+default search. Pass `filter_tags` to include them (together with general
+notes). Optional `clinical` / `labels` filters AND-restrict further.
+Unknown tag strings are accepted (no whitelist).
 
 ```bash
 curl -X POST http://127.0.0.1:8000/knowledge/search \
@@ -150,9 +156,14 @@ curl -X POST http://127.0.0.1:8000/knowledge/search \
     \"specialist_id\": \"spec-1\",
     \"query\": \"протокол\",
     \"limit\": 5,
-    \"filter_tags\": {\"audience\": {\"gender\": \"male\", \"age_min\": 40}}
+    \"filter_tags\": {
+      \"audience\": [\"sex:female\", \"age_bucket:26_35\"],
+      \"clinical\": [\"procedure:rf_face\"]
+    }
   }"
 ```
+
+Each search hit includes `tags` inherited from the source file/chunk.
 
 ### RAG answer
 
@@ -179,6 +190,8 @@ Embedding models cannot generate answers by themselves.
 Upload pipeline: extract → pack paragraphs into chunks (`CHUNK_SIZE` / `CHUNK_OVERLAP`) → embed.
 
 DOCX paragraphs are **packed together** up to `CHUNK_SIZE` (default 1500), so a section heading stays with the following list/body instead of becoming a standalone chunk. Already imported files keep old cuts until re-uploaded.
+
+`.txt` files are stored as a **single chunk** (entire file, no splitting).
 
 Upload filenames are normalized to UTF-8 (fixes common multipart mojibake).
 

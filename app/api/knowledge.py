@@ -46,9 +46,10 @@ def _to_out(document) -> KnowledgeDocumentOut:
     summary="Add knowledge manually",
     description=(
         "Create a knowledge document with one embedded chunk. "
-        "Optional `tags.audience` marks a segment note "
-        "(e.g. gender/age) that is hidden from default search/answer "
-        "until a matching `filter_tags.audience` is passed."
+        "Optional `tags.audience` / `tags.clinical` / `tags.labels` are "
+        "flat string lists. Audience notes are hidden from default "
+        "search/answer until a matching `filter_tags.audience` is passed. "
+        "Unknown label strings are accepted (no whitelist / no 422)."
     ),
 )
 async def create_knowledge(
@@ -77,9 +78,9 @@ async def create_knowledge(
     summary="Add chat message to specialist knowledge base",
     description=(
         "Idempotent by `(specialist_id, message_id)`. "
-        "Supports the same `tags.system` / `tags.audience` shape as "
-        "manual create. Segment (`audience`) notes stay hidden from "
-        "default search until `filter_tags` is provided."
+        "Supports the same flat `tags.audience` / `clinical` / `labels` "
+        "shape as manual create. Segment (`audience`) notes stay hidden "
+        "from default search until `filter_tags` is provided."
     ),
 )
 async def create_from_message(
@@ -116,11 +117,15 @@ async def create_from_message(
     status_code=status.HTTP_201_CREATED,
     summary="Upload a file into the specialist knowledge base",
     description=(
-        "Extract text from pdf/doc/docx/xls/xlsx, chunk, embed, and store. "
+        "Extract text from pdf/doc/docx/xls/xlsx/txt, chunk, embed, and store. "
+        "Re-uploading the same filename for a specialist replaces the "
+        "existing document (same id, new chunks/tags). "
         "Technical metadata is stored under `tags.system` "
         "(`filename`, `content_type`, chunk metadata) and does **not** hide "
         "chunks from search. Optional multipart `tags` field accepts a JSON "
-        "object/array (e.g. audience filters)."
+        "object with flat string lists, e.g. "
+        '`{"audience":["sex:female"],"clinical":["procedure:rf_face"],'
+        '"labels":["manual:spf_лето"]}` (or a plain string array → labels).'
     ),
 )
 async def upload_knowledge(
@@ -129,8 +134,10 @@ async def upload_knowledge(
     tags: str | None = Form(
         None,
         description=(
-            'Optional JSON tags, e.g. '
-            '`{"audience": {"gender": "male"}}` or `{"system": {"labels": ["x"]}}`'
+            "Optional JSON tags with flat string lists, e.g. "
+            '`{"audience":["sex:female","age_bucket:26_35"],'
+            '"clinical":["procedure:rf_face"],'
+            '"labels":["manual:spf_лето"]}`'
         ),
     ),
     file: UploadFile = File(...),
@@ -207,9 +214,10 @@ async def upload_knowledge(
     summary="Semantic search in specialist knowledge base",
     description=(
         "Cosine similarity search over chunk embeddings. "
-        "By default, chunks with `tags.audience` are excluded. "
-        "Pass `filter_tags.audience` to also include matching segment "
-        "notes (plus general notes without audience)."
+        "By default, chunks with non-empty `tags.audience` are excluded. "
+        "Pass `filter_tags.audience` (string list) to also include matching "
+        "segment notes (plus general notes without audience). "
+        "Each hit includes `tags` inherited from the source document/chunk."
     ),
 )
 async def search_knowledge(
@@ -243,8 +251,9 @@ async def search_knowledge(
     description=(
         "Retrieve similar chunks (same audience visibility rules as "
         "`/knowledge/search`), then ask the chat model to answer using "
-        "only that context. Use `filter_tags.audience` when the client "
-        "profile should unlock segment-specific notes."
+        "only that context. Use `filter_tags.audience` (string list) when "
+        "the client profile should unlock segment-specific notes. "
+        "Sources include `tags` from each chunk."
     ),
 )
 async def answer_knowledge(

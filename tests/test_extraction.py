@@ -9,6 +9,7 @@ from docx import Document
 from app.core.config import Settings
 from app.services.chunking import chunk_text, chunk_text_structured
 from app.services.extraction import ExtractionError, TextExtractor
+from app.services.upload import UploadService
 
 
 def _settings(**overrides) -> Settings:
@@ -140,9 +141,35 @@ def test_extract_pdf_text_layer() -> None:
     assert any("peeling" in block.lower() for block in blocks)  # type: ignore[union-attr]
 
 
+def test_extract_txt_whole_file() -> None:
+    payload = "Голый текст файла.\nВторая строка.".encode("utf-8")
+    blocks = TextExtractor(_settings()).extract("notes.txt", payload)
+    assert blocks == ["Голый текст файла.\nВторая строка."]
+
+
+def test_extract_txt_utf8_bom() -> None:
+    payload = "BOM text".encode("utf-8-sig")
+    blocks = TextExtractor(_settings()).extract("notes.txt", payload)
+    assert blocks == ["BOM text"]
+
+
 def test_extract_unsupported_extension() -> None:
     with pytest.raises(ExtractionError, match="Unsupported"):
-        TextExtractor(_settings()).extract("notes.txt", b"hello")
+        TextExtractor(_settings()).extract("notes.rtf", b"hello")
+
+
+def test_txt_skips_chunking() -> None:
+    """Long TXT must stay one chunk even when over chunk_size."""
+    settings = _settings(chunk_size=50, chunk_overlap=10)
+    long_text = " ".join([f"word{i}" for i in range(40)])
+    assert len(long_text) > settings.chunk_size
+
+    service = UploadService.__new__(UploadService)
+    service.settings = settings
+    chunks = service._build_chunks([long_text], filename="big.txt")
+    assert len(chunks) == 1
+    assert chunks[0]["content"] == long_text
+    assert chunks[0]["metadata"]["chunk_index"] == 0
 
 
 def test_chunk_text_respects_size_and_overlap() -> None:

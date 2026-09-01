@@ -32,22 +32,28 @@ app = FastAPI(
     description=(
         "Per-specialist vector knowledge base on Neon Postgres + pgvector. "
         "No client binding — shared KB for a specialist.\n\n"
-        "## Segment tags (`tags.audience`)\n\n"
-        "Chunks can carry JSON tags with two namespaces:\n\n"
-        "- **`system`** — technical metadata (e.g. upload filename). "
-        "Does **not** hide a chunk from search.\n"
-        "- **`audience`** — segment criteria "
-        "(e.g. `{\"gender\": \"male\", \"age_min\": 40}`). "
-        "Such chunks are **hidden** from `/knowledge/search` and "
-        "`/knowledge/answer` unless the request passes matching "
-        "`filter_tags.audience`.\n\n"
+        "## Tags\n\n"
+        "Preferred shape uses flat string lists:\n\n"
+        "- **`audience`** — segment tags "
+        '(e.g. `["sex:female", "age_bucket:26_35"]`). '
+        "Chunks with a non-empty audience are **hidden** from "
+        "`/knowledge/search` and `/knowledge/answer` unless the request "
+        "passes matching `filter_tags.audience`.\n"
+        "- **`clinical`** / **`labels`** — free-form string lists "
+        "(no whitelist; unknown values are accepted).\n"
+        "- **`system`** — technical metadata (filename, chunk_index). "
+        "Does **not** hide a chunk from search.\n\n"
         "With `filter_tags.audience`, results include general chunks "
-        "(no audience) **and** chunks whose `tags.audience` JSON "
-        "contains the filter (Postgres JSONB `@>`).\n\n"
-        "Example create tags:\n"
-        "`{\"audience\": {\"gender\": \"male\", \"age_min\": 40}}`\n\n"
+        "(no audience) **and** chunks whose audience list contains the "
+        "filter strings (Postgres JSONB `@>`). Optional `clinical` / "
+        "`labels` filters AND-restrict further.\n\n"
+        "Example create/upload tags:\n"
+        '`{"audience":["sex:female","age_bucket:26_35"],'
+        '"clinical":["procedure:rf_face"],"labels":["manual:spf_лето"]}`\n\n'
         "Example search filter:\n"
-        "`{\"filter_tags\": {\"audience\": {\"gender\": \"male\", \"age_min\": 40}}}`"
+        '`{"filter_tags":{"audience":["sex:female","age_bucket:26_35"]}}`\n\n'
+        "Re-uploading the same filename for a specialist replaces the "
+        "existing document (same id)."
     ),
     version="0.1.0",
     lifespan=lifespan,

@@ -22,7 +22,9 @@ from PIL import Image
 
 from app.core.config import Settings, get_settings
 
-SUPPORTED_EXTENSIONS = frozenset({".pdf", ".doc", ".docx", ".xls", ".xlsx"})
+SUPPORTED_EXTENSIONS = frozenset(
+    {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".txt"}
+)
 
 # Numbered list markers: "1.", "2)", "12."
 _NUMBERED_ITEM_RE = re.compile(r"^\d+[.)]\s+")
@@ -73,6 +75,8 @@ class TextExtractor:
             blocks = self._extract_xlsx(data)
         elif ext == ".xls":
             blocks = self._extract_xls(data)
+        elif ext == ".txt":
+            blocks = self._extract_txt(data)
         else:
             raise ExtractionError(f"Unsupported file type '{ext}'")
 
@@ -351,3 +355,21 @@ class TextExtractor:
         if not blocks:
             raise ExtractionError("No text could be extracted from XLS")
         return blocks
+
+    @staticmethod
+    def _extract_txt(data: bytes) -> list[str]:
+        """Decode raw text file as a single plain-text block (no prefixes)."""
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            try:
+                text = data.decode("cp1251")
+            except UnicodeDecodeError as exc:
+                raise ExtractionError(
+                    f"Failed to decode TXT (tried utf-8-sig, cp1251): {exc}"
+                ) from exc
+
+        text = text.strip()
+        if not text:
+            raise ExtractionError("No text could be extracted from TXT")
+        return [text]
